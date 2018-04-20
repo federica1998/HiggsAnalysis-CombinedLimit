@@ -1,4 +1,4 @@
-#include "../interface/MarkovChainMC.h"
+#include "HiggsAnalysis/CombinedLimit/interface/MarkovChainMC.h"
 #include <stdexcept> 
 #include <cmath> 
 #include "TKey.h"
@@ -18,14 +18,15 @@ class THnSparse;
 #include "RooStats/ProposalHelper.h"
 #include "RooStats/ProposalFunction.h"
 #include "RooStats/RooStatsUtils.h"
-#include "../interface/Combine.h"
-#include "../interface/TestProposal.h"
-#include "../interface/DebugProposal.h"
-#include "../interface/CloseCoutSentry.h"
-#include "../interface/RooFitGlobalKillSentry.h"
-#include "../interface/JacknifeQuantile.h"
+#include "HiggsAnalysis/CombinedLimit/interface/Combine.h"
+#include "HiggsAnalysis/CombinedLimit/interface/TestProposal.h"
+#include "HiggsAnalysis/CombinedLimit/interface/DebugProposal.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CloseCoutSentry.h"
+#include "HiggsAnalysis/CombinedLimit/interface/RooFitGlobalKillSentry.h"
+#include "HiggsAnalysis/CombinedLimit/interface/JacknifeQuantile.h"
 
-#include "../interface/ProfilingTools.h"
+#include "HiggsAnalysis/CombinedLimit/interface/ProfilingTools.h"
+#include "HiggsAnalysis/CombinedLimit/interface/utils.h"
 
 using namespace RooStats;
 using namespace std;
@@ -53,6 +54,7 @@ float MarkovChainMC::proposalHelperUniformFraction_ = 0.0;
 bool  MarkovChainMC::alwaysStepPoi_ = true;
 float MarkovChainMC::cropNSigmas_ = 0;
 int   MarkovChainMC::debugProposal_ = false;
+std::vector<std::string> MarkovChainMC::discreteModelPoints_;
 
 MarkovChainMC::MarkovChainMC() : 
     LimitAlgo("Markov Chain MC specific options") 
@@ -95,6 +97,9 @@ MarkovChainMC::MarkovChainMC() :
         ("noSlimChain", "Include also nuisance parameters in the chain that is saved to file")
         ("mergeChains", "Merge MarkovChains instead of averaging limits")
         ("readChains", "Just read MarkovChains from toysFile instead of running MCMC directly")
+        ("discreteModelPoints",
+                boost::program_options::value<std::vector<std::string> >(&discreteModelPoints_)->multitoken(),
+                "Define multiple points in a subset of the POI space among which to step discretely (works only with ortho and test proposals)");
     ;
 }
 
@@ -249,6 +254,22 @@ int MarkovChainMC::runOnce(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStat
         break;
     case TestP:
         ownedPdfProp.reset(new TestProposal(proposalHelperWidthRangeDivisor_, alwaysStepPoi_ ? poi : RooArgList()));
+        if (!discreteModelPoints_.empty()) {
+            discreteModelPointSets_.clear(); 
+            discreteModelPointSets_.resize(discreteModelPoints_.size());
+            for (unsigned int i = 0, n = discreteModelPoints_.size(); i < n; ++i) {
+                utils::createSnapshotFromString(discreteModelPoints_[i], poi, discreteModelPointSets_[i], "--discreteModelPoints");
+                if (verbose > 1) { std::cout << "\nDiscrete model point " << (i+1) << std::endl; discreteModelPointSets_[i].Print("V"); }
+            }
+            RooArgSet discretePOI;
+            RooLinkedListIter iter = poi.iterator();
+            for (RooAbsArg *a = (RooAbsArg *) iter.Next(); a != 0; a = (RooAbsArg *) iter.Next()) {
+                if (discreteModelPointSets_[0].find(a->GetName())) discretePOI.add(*a);
+            }
+            if (verbose > 1) { std::cout << "Discrete POI: " ; discretePOI.Print(""); }
+            TestProposal &tprop = static_cast<TestProposal &>(*ownedPdfProp);
+            tprop.setDiscreteModels((RooRealVar*)discretePOI.first(), discretePOI, discreteModelPointSets_);
+        }
         pdfProp = ownedPdfProp.get();
         break;
   }
@@ -277,11 +298,32 @@ int MarkovChainMC::runOnce(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStat
       mcInt.reset(0);
   }
   if (mcInt.get() == 0) return false;
+
+  // MCMCCalculator calls SetConfidenceLevel on MCMCInterval when creating it
+  // SetConfidenceLevel calls DetermineInterval, which compute the interval from the Markov Chain
+  // for a given confidence level. This results is cached, so if we change the number of burn-in steps
+  // after, it'll have no effect
+  // Clone the MCMCInterval to reset its state, set the number of burn-in steps before calling SetConfidenceLevel
+
+  MCMCInterval* oldInterval = mcInt.get();
+  RooStats::MarkovChain* clonedChain = slimChain(*mc_s->GetParametersOfInterest(), *oldInterval->GetChain());
+  MCMCInterval* newInterval = new MCMCInterval(TString("MCMCIntervalCloned_") + TString(mc.GetName()), RooArgSet(*mc_s->GetParametersOfInterest()), *clonedChain);
+  newInterval->SetUseKeys(oldInterval->GetUseKeys());
+  newInterval->SetIntervalType(oldInterval->GetIntervalType());
+  if (newInterval->GetIntervalType() == MCMCInterval::kTailFraction) {
+    newInterval->SetLeftSideTailFraction(0);
+  }
+  newInterval->SetNumBurnInSteps(burnInSteps_);
+
   if (adaptiveBurnIn_) {
     mcInt->SetNumBurnInSteps(guessBurnInSteps(*mcInt->GetChain()));
   } else if (mcInt->GetChain()->Size() * burnInFraction_ > burnInSteps_) {
     mcInt->SetNumBurnInSteps(mcInt->GetChain()->Size() * burnInFraction_);
   }
+  newInterval->SetConfidenceLevel(oldInterval->ConfidenceLevel());
+
+  mcInt.reset(newInterval);
+
   limit = mcInt->UpperLimit(*r);
 
   if (saveChain_ || mergeChains_) {

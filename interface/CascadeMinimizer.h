@@ -5,22 +5,27 @@ class RooAbsReal;
 class RooArgSet;
 class RooRealVar;
 #include <RooArgSet.h>
-#include "../interface/RooMinimizerOpt.h"
+#include <RooListProxy.h>
+#include <RooSetProxy.h>
+//#include "HiggsAnalysis/CombinedLimit/interface/RooMinimizerOpt.h"
+#include "RooMinimizer.h"
 #include <boost/program_options.hpp>
 
 class CascadeMinimizer {
     public:
         enum Mode { Constrained, Unconstrained };
-        CascadeMinimizer(RooAbsReal &nll, Mode mode, RooRealVar *poi=0, int initialStrategy=0) ;
+        CascadeMinimizer(RooAbsReal &nll, Mode mode, RooRealVar *poi=0) ;
         // do a new minimization, assuming the initial state is random
         bool minimize(int verbose=0, bool cascade=true);
         // run minos
         bool minos(const RooArgSet &, int verbose = 0 );
+        // run hesse
+        bool hesse(int verbose = 0 );
         // do a new minimization, assuming a plausible initial state
         bool improve(int verbose=0, bool cascade=true);
         // declare nuisance parameters for pre-fit
         void setNuisanceParameters(const RooArgSet *nuis) { nuisances_ = nuis; }
-        RooMinimizerOpt & minimizer() { return *minimizer_; }
+        RooMinimizer & minimizer() { return *minimizer_; }
         RooFitResult *save() { return minimizer().save(); }
         void  setStrategy(int strategy) { strategy_ = strategy; }
         void  setErrorLevel(float errorLevel) { minimizer_->setErrorLevel(errorLevel); }
@@ -29,16 +34,28 @@ class CascadeMinimizer {
         static const boost::program_options::options_description & options() { return options_; }
         void trivialMinimize(const RooAbsReal &nll, RooRealVar &r, int points=100) const ;
         //void collectIrrelevantNuisances(RooAbsCollection &irrelevant) const ;
+        void setAutoBounds(const RooArgSet *pois) ; 
+        void setAutoMax(const RooArgSet *pois) ; 
+	double tolerance() {return defaultMinimizerTolerance_;};
+	std::string algo() {return defaultMinimizerAlgo_;};
     private:
         RooAbsReal & nll_;
-        std::auto_ptr<RooMinimizerOpt> minimizer_;
+        std::auto_ptr<RooMinimizer> minimizer_;
         Mode         mode_;
-        int          strategy_;
+        static int          strategy_;
         RooRealVar * poi_; 
         const RooArgSet *nuisances_;
+        /// automatically enlarge bounds for POIs if they're within 10% from the boundary
+        bool autoBounds_;
+        const RooArgSet *poisForAutoBounds_, *poisForAutoMax_;
 
-        bool improveOnce(int verbose);
-        
+        bool improveOnce(int verbose, bool noHesse=false);
+        bool autoBoundsOk(int verbose) ;
+
+	bool multipleMinimize(const RooArgSet &,bool &,double &,int,bool,int
+		,std::vector<std::vector<bool> > & );
+       
+        bool iterativeMinimize(double &,int,bool); 
         /// options configured from command line
         static boost::program_options::options_description options_;
         /// compact information about an algorithm
@@ -53,6 +70,10 @@ class CascadeMinimizer {
         static std::vector<Algo> fallbacks_;
         /// do a pre-scan
         static bool preScan_;
+        /// do a pre-fit (with larger tolerance)
+        static double approxPreFitTolerance_;
+        /// do a pre-fit (with larger tolerance)
+        static int approxPreFitStrategy_;
         /// do a pre-fit (w/o nuisances)
         static int preFit_;
         /// do first a fit of only the POI
@@ -65,11 +86,43 @@ class CascadeMinimizer {
         static bool setZeroPoint_;
         /// don't do old fallback using robustMinimize 
         static bool oldFallback_;
+        /// call Hesse before or after the minimization 
+        static bool firstHesse_, lastHesse_;
+        /// storage level for minuit2 (toggles storing of intermediate covariances)
+        static int minuit2StorageLevel_;
+
+	static double discreteMinTol_;
 
 	static std::string defaultMinimizerType_;
 	static std::string defaultMinimizerAlgo_;
+	static double 	   defaultMinimizerTolerance_;
+	//static int 	   defaultMinimizerStrategy_;
 
+    	static bool runShortCombinations; 
         //static void setDefaultIntegrator(RooCategory &cat, const std::string & val) ;
+};
+
+// Singleton Class inside!
+class CascadeMinimizerGlobalConfigs{
+
+	private:
+	  CascadeMinimizerGlobalConfigs(){};
+	  CascadeMinimizerGlobalConfigs(const CascadeMinimizerGlobalConfigs&) {};
+	  CascadeMinimizerGlobalConfigs& operator=(const CascadeMinimizerGlobalConfigs&);
+
+	public:
+
+	  //RooCategory* x;
+	  RooListProxy pdfCategories; 
+	  RooListProxy nuisanceParameters; 
+	  RooListProxy parametersOfInterest; 
+ 
+	  static CascadeMinimizerGlobalConfigs& O(){
+
+		static CascadeMinimizerGlobalConfigs singleton;
+		return singleton;
+	  }
+
 };
 
 #endif

@@ -8,7 +8,7 @@
  *
  *
  */
-#include "../interface/LimitAlgo.h"
+#include "HiggsAnalysis/CombinedLimit/interface/LimitAlgo.h"
 #include <TList.h>
 class RooArgSet;
 namespace RooStats { class MarkovChain; }
@@ -62,6 +62,9 @@ private:
   static float        proposalHelperWidthRangeDivisor_, proposalHelperUniformFraction_;
   static float        cropNSigmas_;
   static int          debugProposal_;
+  ///
+  static std::vector<std::string> discreteModelPoints_;
+  mutable std::vector<RooArgSet>  discreteModelPointSets_;
 
   mutable TList chains_;
 

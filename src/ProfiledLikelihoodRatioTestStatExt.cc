@@ -1,8 +1,8 @@
-#include "../interface/ProfiledLikelihoodRatioTestStatExt.h"
-#include "../interface/CascadeMinimizer.h"
-#include "../interface/CloseCoutSentry.h"
-#include "../interface/CachingNLL.h"
-#include "../interface/utils.h"
+#include "HiggsAnalysis/CombinedLimit/interface/ProfiledLikelihoodRatioTestStatExt.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CascadeMinimizer.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CloseCoutSentry.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CachingNLL.h"
+#include "HiggsAnalysis/CombinedLimit/interface/utils.h"
 #include <stdexcept>
 #include <RooRealVar.h>
 #include <RooMinimizer.h>
@@ -12,7 +12,7 @@
 #include <RooRandom.h>
 #include <Math/MinimizerOptions.h>
 #include <RooStats/RooStatsUtils.h>
-#include "../interface/ProfilingTools.h"
+#include "HiggsAnalysis/CombinedLimit/interface/ProfilingTools.h"
 
 //---- Uncomment this and run with --perfCounters to get statistics of successful and failed fits
 //#define DEBUG_FIT_STATUS
@@ -227,11 +227,14 @@ Double_t ProfiledLikelihoodTestStatOpt::Evaluate(RooAbsData& data, RooArgSet& /*
         utils::setAllConstant(poiParams_,true);
     }
     double thisNLL = nullNLL;
+
+    // Check number of floating paramters 
+    int nfloatingpars = utils::countFloating(*(nll_->getParameters( (const RooArgSet*) 0)));
     if (initialR == 0 || oneSided_ != oneSidedDef || bestFitR < initialR) { 
         // must do constrained fit (if there's something to fit besides XS)
         //std::cout << "PERFORMING CONSTRAINED FIT " << r->GetName() << " == " << r->getVal() << std::endl;
         if (do_debug) std::cout << "NLL shift from unconstrained fit before re-profiling: " << nll_->getVal() - nullNLL << std::endl;    
-        thisNLL = (nuisances_.getSize() > 0 ? minNLL(/*constrained=*/true, r) : nll_->getVal());
+        thisNLL = (nfloatingpars > 0 ? minNLL(/*constrained=*/true, r) : nll_->getVal());
         if (thisNLL - nullNLL < -0.02) { 
             DBG(DBG_PLTestStat_main, (printf("  --> constrained fit is better... will repeat unconstrained fit\n")))
             utils::setAllConstant(poiParams_,false);
@@ -338,10 +341,12 @@ std::vector<Double_t> ProfiledLikelihoodTestStatOpt::Evaluate(RooAbsData& data, 
         r->setVal(initialR); 
         r->setConstant(true);
         double thisNLL = nullNLL, sign = +1.0;
+    	int nfloatingpars = utils::countFloating(*(nll_->getParameters( (const RooArgSet*) 0)));
         if (initialR == 0 || oneSided_ != oneSidedDef || bestFitR < initialR) { 
             // must do constrained fit (if there's something to fit besides XS)
             //std::cout << "PERFORMING CONSTRAINED FIT " << r->GetName() << " == " << r->getVal() << std::endl;
-            thisNLL = (nuisances_.getSize() > 0 ? minNLL(/*constrained=*/true, r) : nll_->getVal());
+            thisNLL = (nfloatingpars > 0 ? minNLL(/*constrained=*/true, r) : nll_->getVal());
+            //thisNLL = (nuisances_.getSize() > 0 ? minNLL(/*constrained=*/true, r) : nll_->getVal());
             if (thisNLL - nullNLL < 0 && thisNLL - nullNLL >= -EPS) {
                 thisNLL = nullNLL;
             } else if (thisNLL - nullNLL < 0) {
@@ -401,7 +406,7 @@ double ProfiledLikelihoodTestStatOpt::minNLL(bool constrained, RooRealVar *r)
 }
 
 //============================================================ProfiledLikelihoodRatioTestStatExt
-bool nllutils::robustMinimize(RooAbsReal &nll, RooMinimizerOpt &minim, int verbosity, bool zeroPoint) 
+bool nllutils::robustMinimize(RooAbsReal &nll, RooMinimizer &minim, int verbosity, bool zeroPoint) 
 {
     static bool do_debug = (runtimedef::get("DEBUG_MINIM") || runtimedef::get("DEBUG_PLTSO") > 1);
     double initialNll = nll.getVal();
@@ -457,7 +462,7 @@ bool nllutils::robustMinimize(RooAbsReal &nll, RooMinimizerOpt &minim, int verbo
         } else if (tries != maxtries) {
             std::auto_ptr<RooFitResult> res(do_debug ? minim.save() : 0);
             //PerfCounter::add("Minimizer.save() called for failed minimization"); 
-            if (tries > 0 && minim.edm() < 0.05*ROOT::Math::MinimizerOptions::DefaultTolerance()) {
+            if (tries > 0 && res->edm() < 0.05*ROOT::Math::MinimizerOptions::DefaultTolerance()) {
                 DBG(DBG_PLTestStat_main, (printf("\n  --> acceptable: status %d, edm %10.7f, nll initial % 10.4f, nll final % 10.4f, change %10.5f\n", status, res->edm(), initialNll, nll.getVal(), initialNll - nll.getVal())))
                 if (do_debug) printf("\n  --> acceptable: status %d, edm %10.7f, nll initial % 10.4f, nll final % 10.4f, change %10.5f\n", status, res->edm(), initialNll, nll.getVal(), initialNll - nll.getVal());
                 COUNT_ONE("nllutils::robustMinimize: accepting fit with bad status but good EDM")

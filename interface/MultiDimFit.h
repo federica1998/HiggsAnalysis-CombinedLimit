@@ -8,7 +8,7 @@
  *
  *
  */
-#include "../interface/FitterAlgoBase.h"
+#include "HiggsAnalysis/CombinedLimit/interface/FitterAlgoBase.h"
 #include <RooRealVar.h>
 #include <vector>
 
@@ -24,7 +24,7 @@ public:
 protected:
   virtual bool runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats::ModelConfig *mc_b, RooAbsData &data, double &limit, double &limitErr, const double *hint);
 
-  enum Algo { None, Singles, Cross, Grid, RandomPoints, Contour2D, Stitch2D };
+  enum Algo { None, Singles, Cross, Grid, RandomPoints, Contour2D, Stitch2D, FixedPoint, Impact };
   static Algo algo_;
 
   enum GridType { G1x1, G3x3 };
@@ -36,27 +36,59 @@ protected:
   static RooArgList                poiList_; 
   static unsigned int              nOtherFloatingPoi_; // keep a count of other POIs that we're ignoring, for proper chisquare normalization
   static float                     deltaNLL_;
+  static int                       covQual_;
+
+  static std::string name_;
+  std::auto_ptr<TFile> fitOut;
 
   // options    
   static unsigned int points_, firstPoint_, lastPoint_;
   static bool floatOtherPOIs_;
+  static bool squareDistPoiStep_;
+  static bool skipInitialFit_;
   static bool fastScan_;
   static bool hasMaxDeltaNLLForProf_;
+  static bool loadedSnapshot_,  savingSnapshot_;
   static float maxDeltaNLLForProf_;
+  static float autoRange_;
+  static bool  startFromPreFit_;
+  static bool  saveFitResult_;
+  static std::string fixedPointPOIs_;
+  static float centeredRange_;
 
+  static std::string saveSpecifiedFuncs_;
+  static std::string saveSpecifiedNuis_;
+  static std::string saveSpecifiedIndex_;
+  static std::vector<std::string>  specifiedFuncNames_;
+  static std::vector<RooAbsReal*> specifiedFunc_;
+  static std::vector<float>        specifiedFuncVals_;
+  static RooArgList                specifiedFuncList_;
+  static std::vector<std::string>  specifiedCatNames_;
+  static std::vector<RooCategory*> specifiedCat_;
+  static std::vector<int>        specifiedCatVals_;
+  static RooArgList                specifiedCatList_;
+  static std::vector<std::string>  specifiedNuis_;
+  static std::vector<RooRealVar *> specifiedVars_;
+  static std::vector<float>        specifiedVals_;
+  static RooArgList                specifiedList_;
+  static bool saveInactivePOI_;
   // initialize variables
   void initOnce(RooWorkspace *w, RooStats::ModelConfig *mc_s) ;
 
   // variables
   void doSingles(RooFitResult &res) ;
-  void doGrid(RooAbsReal &nll) ;
-  void doRandomPoints(RooAbsReal &nll) ;
-  void doContour2D(RooAbsReal &nll) ;
-  void doStitch2D(RooAbsReal &nll) ;
+  void doGrid(RooWorkspace *w, RooAbsReal &nll) ;
+  void doRandomPoints(RooWorkspace *w, RooAbsReal &nll) ;
+  void doFixedPoint(RooWorkspace *w, RooAbsReal &nll) ;
+  void doContour2D(RooWorkspace *w, RooAbsReal &nll) ;
+  void doStitch2D(RooWorkspace *w, RooAbsReal &nll) ;
+  void doImpact(RooFitResult &res, RooAbsReal &nll) ;
 
   // utilities
   /// for each RooRealVar, set a range 'box' from the PL profiling all other parameters
   void doBox(RooAbsReal &nll, double cl, const char *name="box", bool commitPoints=true) ;
+  /// save a file with the RooFitResult inside
+  void saveResult(RooFitResult &res);
 };
 
 

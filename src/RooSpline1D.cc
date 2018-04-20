@@ -1,6 +1,34 @@
-#include "../interface/RooSpline1D.h"
+#include "HiggsAnalysis/CombinedLimit/interface/RooSpline1D.h"
 
 #include <stdexcept>
+
+#include <fstream>
+#include <sstream>
+
+RooSpline1D::RooSpline1D(const char *name, const char *title, RooAbsReal &xvar, const char *path, const unsigned short xcol, const unsigned short ycol, const unsigned short skipLines, const char *algo) :
+        RooAbsReal(name,title),
+        xvar_("xvar","Variable", this, xvar),
+        x_(), y_(), type_(algo),
+        interp_(0)
+{
+        std::ifstream file( path, std::ios::in);
+        std::string line;
+
+        for(int lineno=0; std::getline(file, line); lineno++){
+        	if(lineno<skipLines) continue;
+            std::istringstream ss(line);
+            std::istream_iterator<std::string > begin(ss), end;
+            std::vector<std::string> tokens(begin, end);
+
+            x_.push_back(atof(tokens[xcol].c_str()));
+            y_.push_back(atof(tokens[ycol].c_str()));
+
+//            std::cout << lineno << ": " << line << std::endl;
+        }
+
+        file.close();
+}
+
 
 RooSpline1D::RooSpline1D(const char *name, const char *title, RooAbsReal &xvar, unsigned int npoints, const double *xvals, const double *yvals, const char *algo) :
         RooAbsReal(name,title),
@@ -26,6 +54,13 @@ RooSpline1D::RooSpline1D(const char *name, const char *title, RooAbsReal &xvar, 
     }
 }
 
+RooSpline1D::RooSpline1D(const RooSpline1D &other, const char *newname) :
+    RooAbsReal(other,newname),
+    xvar_("xvar",this,other.xvar_),
+    x_(other.x_), y_(other.y_), type_(other.type_),
+    interp_(0)
+{
+}
 
 RooSpline1D::~RooSpline1D() 
 {
@@ -35,7 +70,7 @@ RooSpline1D::~RooSpline1D()
 
 TObject *RooSpline1D::clone(const char *newname) const 
 {
-    return new RooSpline1D(newname, this->GetTitle(), const_cast<RooAbsReal &>(xvar_.arg()), x_.size(), &x_[0], &y_[0], type_.c_str());
+    return new RooSpline1D(*this, newname);
 }
 
 void RooSpline1D::init() const {

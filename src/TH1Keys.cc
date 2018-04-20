@@ -1,4 +1,4 @@
-#include "../interface/TH1Keys.h"
+#include "HiggsAnalysis/CombinedLimit/interface/TH1Keys.h"
 #include <RooBinning.h>
 #include <RooMsgService.h>
 
@@ -76,7 +76,7 @@ TH1Keys::TH1Keys(const char *name,const char *title,Int_t nbinsx,const Double_t 
 
 
 TH1Keys::TH1Keys(const TH1Keys &other)  :
-    TH1(other),
+    TH1(),
     min_(other.min_), max_(other.max_),
     x_(new RooRealVar("x", "x", min_, max_)),
     w_(new RooRealVar("w", "w", 1.0)),
@@ -89,6 +89,7 @@ TH1Keys::TH1Keys(const TH1Keys &other)  :
     cache_((TH1*)other.cache_->Clone()),
     isCacheGood_(other.isCacheGood_)
 {
+    other.Copy(*this);
     fDimension = 1;
     x_->setBinning(other.x_->getBinning());
 }
@@ -165,9 +166,9 @@ void TH1Keys::FillH1() const
         RooNDKeysPdf pdf("","",*x_,*dataset_,options_,rho_);
         cache_ = pdf.createHistogram(GetName(), *x_);
         if (cache_->Integral()) cache_->Scale(1.0/cache_->Integral());
-        cache_->SetBinContent(0,                     underflow_);
-        cache_->SetBinContent(cache_->GetNbinsX()+1, overflow_);
         cache_->Scale(dataset_->sumEntries() * globalScale_);
+        cache_->SetBinContent(0,                     underflow_ * globalScale_);
+        cache_->SetBinContent(cache_->GetNbinsX()+1, overflow_  * globalScale_);
         RooMsgService::instance().setGlobalKillBelow(gKill);
     }
     isCacheGood_ = true;

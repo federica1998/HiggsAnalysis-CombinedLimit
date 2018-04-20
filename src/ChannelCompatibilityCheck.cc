@@ -1,4 +1,4 @@
-#include "../interface/ChannelCompatibilityCheck.h"
+#include "HiggsAnalysis/CombinedLimit/interface/ChannelCompatibilityCheck.h"
 #include <TFile.h>
 #include <RooRealVar.h>
 #include <RooArgSet.h>
@@ -8,11 +8,12 @@
 #include <RooCustomizer.h>
 #include <RooSimultaneous.h>
 #include <RooStats/ModelConfig.h>
-#include "../interface/Combine.h"
-#include "../interface/ProfileLikelihood.h"
-#include "../interface/CloseCoutSentry.h"
-#include "../interface/RooSimultaneousOpt.h"
-#include "../interface/utils.h"
+#include "HiggsAnalysis/CombinedLimit/interface/Combine.h"
+#include "HiggsAnalysis/CombinedLimit/interface/Significance.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CloseCoutSentry.h"
+#include "HiggsAnalysis/CombinedLimit/interface/RooSimultaneousOpt.h"
+#include "HiggsAnalysis/CombinedLimit/interface/utils.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CachingNLL.h"
 
 
 #include <Math/MinimizerOptions.h>
@@ -76,8 +77,14 @@ bool ChannelCompatibilityCheck::runSpecific(RooWorkspace *w, RooStats::ModelConf
   CloseCoutSentry sentry(verbose < 2);
   const RooCmdArg &constCmdArg = withSystematics  ? RooFit::Constrain(*mc_s->GetNuisanceParameters()) : RooFit::NumCPU(1); // use something dummy 
   std::auto_ptr<RooFitResult> result_nominal (doFit(   *sim, data, minosOneVar, constCmdArg, runMinos_)); // let's run Hesse if we want to run Minos
+  if (dynamic_cast<cacheutils::CachingSimNLL*>(nll.get())) {
+    static_cast<cacheutils::CachingSimNLL*>(nll.get())->clearConstantZeroPoint();
+  }
   double nll_nominal   = nll->getVal();
   std::auto_ptr<RooFitResult> result_freeform(doFit(*newsim, data, minosVars,   constCmdArg, runMinos_));
+  if (dynamic_cast<cacheutils::CachingSimNLL*>(nll.get())) {
+    static_cast<cacheutils::CachingSimNLL*>(nll.get())->clearConstantZeroPoint();
+  }
   double nll_freeform   = nll->getVal();
   sentry.clear();
 

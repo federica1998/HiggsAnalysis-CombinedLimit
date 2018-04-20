@@ -1,6 +1,15 @@
 from sys import stdout, stderr
 import os.path
 import ROOT
+from math import *
+
+RooArgSet_add_original = ROOT.RooArgSet.add
+def RooArgSet_add_patched(self, obj, *args, **kwargs):
+    if isinstance(obj, ROOT.RooAbsCollection):
+        return ROOT.RooAbsCollection.add(self, obj, *args, **kwargs)
+    else:
+        return RooArgSet_add_original(self, obj, *args, **kwargs)
+ROOT.RooArgSet.add = RooArgSet_add_patched
 
 from HiggsAnalysis.CombinedLimit.ModelTools import ModelBuilder
 
@@ -14,11 +23,13 @@ class ShapeBuilder(ModelBuilder):
                 ROOT.gSystem.Load(lib)
     	self.wspnames = {}
     	self.wsp = None
+    	self.extraImports = []
+	self.norm_rename_map = {}
     ## ------------------------------------------
     ## -------- ModelBuilder interface ----------
     ## ------------------------------------------
     def doObservables(self):
-        if (self.options.verbose > 1): stderr.write("Using shapes: qui si parra' la tua nobilitate\n")
+        if (self.options.verbose > 2): stderr.write("Using shapes: qui si parra' la tua nobilitate\n")
         self.prepareAllShapes();
         if len(self.DC.bins) > 1 or not self.options.forceNonSimPdf:
             ## start with just a few channels
@@ -27,7 +38,7 @@ class ShapeBuilder(ModelBuilder):
             self.out.binCat = self.out.cat("CMS_channel");
             ## then add all the others, to avoid a too long factory string
             for i,l in enumerate(self.DC.bins[5:]): self.out.binCat.defineType(l,i+5)   
-            if self.options.verbose: stderr.write("Will use category 'CMS_channel' to identify the %d channels\n" % self.out.binCat.numTypes())
+            if self.options.verbose > 1: stderr.write("Will use category 'CMS_channel' to identify the %d channels\n" % self.out.binCat.numTypes())
             self.out.obs = ROOT.RooArgSet()
             self.out.obs.add(self.out.binVars)
             self.out.obs.add(self.out.binCat)
@@ -37,60 +48,189 @@ class ShapeBuilder(ModelBuilder):
         if len(self.DC.obs) != 0: 
             self.doCombinedDataset()
     def doIndividualModels(self):
-        for b in self.DC.bins:
+        if self.options.verbose:
+            stderr.write("Creating pdfs for individual modes (%d): " % len(self.DC.bins));
+            stderr.flush()
+        for i,b in enumerate(self.DC.bins):
+            #print "  + Getting model for bin %s" % (b)
             pdfs   = ROOT.RooArgList(); bgpdfs   = ROOT.RooArgList()
             coeffs = ROOT.RooArgList(); bgcoeffs = ROOT.RooArgList()
+            sigcoeffs = []
+            binconstraints = ROOT.RooArgList()
+            bbb_args = None
+            channelBinParFlag = b in self.DC.binParFlags.keys()
+            if channelBinParFlag:
+                print 'Channel %s will use autoMCStats with settings: event-threshold=%g, include-signal=%i, hist-mode=%i' % ((b,)+self.DC.binParFlags[b])
             for p in self.DC.exp[b].keys(): # so that we get only self.DC.processes contributing to this bin
                 if self.DC.exp[b][p] == 0: continue
                 if self.physics.getYieldScale(b,p) == 0: continue # exclude really the pdf
+                #print "  +--- Getting pdf for %s in bin %s" % (p,b)
                 (pdf,coeff) = (self.getPdf(b,p), self.out.function("n_exp_bin%s_proc_%s" % (b,p)))
+                if self.options.optimizeExistingTemplates:
+                    pdf1 = self.optimizeExistingTemplates(pdf)
+                    if (pdf1 != pdf):
+                        self.out.dont_delete.append(pdf1)
+                        pdf = pdf1
                 extranorm = self.getExtraNorm(b,p)
                 if extranorm:
                     prodset = ROOT.RooArgList(self.out.function("n_exp_bin%s_proc_%s" % (b,p)))
-                    for X in extranorm: prodset.add(self.out.function(X))
-                    prodfunc = ROOT.RooProduct("n_exp_final_bin%s_proc_%s" % (b,p), "", prodset)
-                    self.out._import(prodfunc)
-                    coeff = self.out.function("n_exp_final_bin%s_proc_%s" % (b,p))                    
+                    for X in extranorm:
+                    	# X might already be in the workspace (e.g. _norm term)...
+                    	if self.out.function(X):
+                    		prodset.add(self.out.function(X))
+                    	# ... but usually it's only in our object store (e.g. AsymPow for shape systs)
+                    	else:
+                    		prodset.add(self.getObj(X))
+                    coeff = self.addObj(ROOT.RooProduct, "n_exp_final_bin%s_proc_%s" % (b,p), "", prodset)
+                pdf.setStringAttribute("combine.process", p)
+                pdf.setStringAttribute("combine.channel", b)
+                pdf.setAttribute("combine.signal", self.DC.isSignal[p])
+                if channelBinParFlag and self.DC.isSignal[p] and not self.DC.binParFlags[b][1]:
+                    pdf.setAttribute('skipForErrorSum')
+                coeff.setStringAttribute("combine.process", p)
+                coeff.setStringAttribute("combine.channel", b)
+                coeff.setAttribute("combine.signal", self.DC.isSignal[p])
                 pdfs.add(pdf); coeffs.add(coeff)
                 if not self.DC.isSignal[p]:
                     bgpdfs.add(pdf); bgcoeffs.add(coeff)
-            if self.options.verbose: print "Creating RooAddPdf %s with %s elements" % ("pdf_bin"+b, coeffs.getSize())
-            sum_s = ROOT.RooAddPdf("pdf_bin%s"       % b, "",   pdfs,   coeffs)
-            sum_b = ROOT.RooAddPdf("pdf_bin%s_bonly" % b, "", bgpdfs, bgcoeffs)
+                else:
+                    sigcoeffs.append(coeff)
+            if self.options.verbose > 1: print "Creating RooAddPdf %s with %s elements" % ("pdf_bin"+b, coeffs.getSize())
+            if channelBinParFlag: 
+                prop = self.addObj(ROOT.CMSHistErrorPropagator, "prop_bin%s" % b, "", pdfs.at(0).getXVar(), pdfs, coeffs)
+                prop.setAttribute('CachingPdf_Direct', True)
+                if self.DC.binParFlags[b][0] >= 0.:
+                    bbb_args = prop.setupBinPars(self.DC.binParFlags[b][0])
+                    for bidx in range(bbb_args.getSize()):
+                        arg = bbb_args.at(bidx)
+                        n = arg.GetName()
+                        parname = n
+                        self.out._import(arg)
+                        if arg.getAttribute("createGaussianConstraint"):
+                            self.doObj("%s_Pdf" % n, "SimpleGaussianConstraint", "%s, %s_In[0,%s], %s" % (n, n, '-7,7', '1.0'), True)
+                            self.out.var(n).setVal(0)
+                            self.out.var(n).setError(1)
+                            if self.options.optimizeBoundNuisances: self.out.var(n).setAttribute("optimizeBounds")
+                        elif arg.getAttribute("createPoissonConstraint"):
+                            nom = arg.getVal()
+                            pval = ROOT.Math.normal_cdf_c(7)
+                            minObs = nom
+                            while minObs > 0 and (ROOT.TMath.Poisson(minObs, nom + 1) > pval):
+                                minObs -= (sqrt(nom) if nom > 10 else 1)
+                            maxObs = nom + 2
+                            while (ROOT.TMath.Poisson(maxObs, nom + 1) > pval):
+                                #print "Poisson(maxObs = %d, %f) = %g > 1e-12" % (maxObs, args[0]+1, ROOT.TMath.Poisson(maxObs, args[0]+1))
+                                maxObs += (sqrt(nom) if nom > 10 else 2)
+                            self.doObj("%s_Pdf" % n, "Poisson", "%s_In[%d,%f,%f], %s, 1" % (n, nom, minObs, maxObs, n))
+                            if n.endswith('_prod'):
+                                parname = n[:-5]
+                        binconstraints.add(self.out.pdf('%s_Pdf' % n))
+                        self.out.var("%s_In" % n).setConstant(True)
+                        self.extraNuisances.append(self.out.var("%s" % parname))
+                        self.extraGlobalObservables.append(self.out.var("%s_In" % n))
+                if not self.out.var('ONE'):
+                    self.doVar('ONE[1.0]')
+                sum_s = self.addObj(ROOT.RooRealSumPdf, "pdf_bin%s"       % b,  "", ROOT.RooArgList(prop),   ROOT.RooArgList(self.out.var('ONE')), True)
+                if not self.options.noBOnly:
+                    if not self.out.var('ZERO'):
+                        self.doVar('ZERO[0.0]')
+                    customizer = ROOT.RooCustomizer(prop, "")
+                    for arg in sigcoeffs:
+                        customizer.replaceArg(arg, self.out.var('ZERO'))
+                    prop_b = customizer.build(True)
+                    if len(sigcoeffs):
+                        prop_b.SetName("prop_bin%s_bonly" % b)
+                    self.objstore[prop_b.GetName()] = prop_b
+                    sum_b = self.addObj(ROOT.RooRealSumPdf, "pdf_bin%s_bonly"       % b,  "", ROOT.RooArgList(prop_b),   ROOT.RooArgList(self.out.var('ONE')), True)
+            else:
+                sum_s = self.addObj(ROOT.RooAddPdf,"pdf_bin%s"       % b,  "",  pdfs,   coeffs)
+                if not self.options.noBOnly: sum_b = self.addObj(ROOT.RooAddPdf, "pdf_bin%s_bonly" % b, "", bgpdfs, bgcoeffs)
+            sum_s.setAttribute("MAIN_MEASUREMENT") # useful for plain ROOFIT optimization on ATLAS side
             if b in self.pdfModes: 
                 sum_s.setAttribute('forceGen'+self.pdfModes[b].title())
-                sum_b.setAttribute('forceGen'+self.pdfModes[b].title())
-            if len(self.DC.systs):
+                if not self.options.noBOnly: sum_b.setAttribute('forceGen'+self.pdfModes[b].title())
+            addSyst = False
+            if    self.options.moreOptimizeSimPdf == "none":   addSyst = True
+            elif  self.options.moreOptimizeSimPdf == "lhchcg": addSyst = (i > 1)
+            elif  self.options.moreOptimizeSimPdf == "cms":
+                if self.options.noOptimizePdf: raise RuntimeError, "--optimize-simpdf-constraints=cms is incompatible with --no-optimize-pdfs"
+                addSyst = False
+            if (len(self.DC.systs) or binconstraints.getSize()) and addSyst:
                 ## rename the pdfs
-                sum_s.SetName("pdf_bin%s_nuis" % b); sum_b.SetName("pdf_bin%s_bonly_nuis" % b)
+                self.renameObj("pdf_bin%s" % b, "pdf_bin%s_nuis" % b)
+                if not self.options.noBOnly:
+                	self.renameObj("pdf_bin%s_bonly" % b, "pdf_bin%s_bonly_nuis" % b)
                 # now we multiply by all the nuisances, but avoiding nested products
                 # so we first make a list of all nuisances plus the RooAddPdf
-                sumPlusNuis_s = ROOT.RooArgList(self.out.nuisPdfs); sumPlusNuis_s.add(sum_s)
-                sumPlusNuis_b = ROOT.RooArgList(self.out.nuisPdfs); sumPlusNuis_b.add(sum_b)
+                if len(self.DC.systs):
+                    sumPlusNuis_s = ROOT.RooArgList(self.out.nuisPdfs)
+                else:
+                    sumPlusNuis_s = ROOT.RooArgList()
+                sumPlusNuis_s.add(sum_s)
+                pdf_bins = self.addObj(ROOT.RooProdPdf, 'pdfbins_bin%s' % b, "", binconstraints)
+                sumPlusNuis_s.add(pdf_bins)
                 # then make RooProdPdf and import it
-                pdf_s = ROOT.RooProdPdf("pdf_bin%s"       % b, "", sumPlusNuis_s) 
-                pdf_b = ROOT.RooProdPdf("pdf_bin%s_bonly" % b, "", sumPlusNuis_b) 
+                pdf_s = self.addObj(ROOT.RooProdPdf, "pdf_bin%s"       % b, "", sumPlusNuis_s)
+                if not self.options.noBOnly:
+                    if len(self.DC.systs):
+                        sumPlusNuis_b = ROOT.RooArgList(self.out.nuisPdfs)
+                    else:
+                        sumPlusNuis_b = ROOT.RooArgList()
+                    sumPlusNuis_b.add(sum_b)
+                    sumPlusNuis_b.add(pdf_bins)
+                    pdf_b = self.addObj(ROOT.RooProdPdf, "pdf_bin%s_bonly" % b, "", sumPlusNuis_b)
                 if b in self.pdfModes: 
                     pdf_s.setAttribute('forceGen'+self.pdfModes[b].title())
-                    pdf_b.setAttribute('forceGen'+self.pdfModes[b].title())
-                self.out._import(pdf_s, ROOT.RooFit.RenameConflictNodes(b))
-                self.out._import(pdf_b, ROOT.RooFit.RecycleConflictNodes(), ROOT.RooFit.Silence())
+                    if not self.options.noBOnly: pdf_b.setAttribute('forceGen'+self.pdfModes[b].title())
+                if self.options.verbose:
+                    if i > 0: stderr.write("\b\b\b\b\b");
+                    stderr.write(". %4d" % (i+1))
+                    stderr.flush()
             else:
-                self.out._import(sum_s, ROOT.RooFit.RenameConflictNodes(b))
-                self.out._import(sum_b, ROOT.RooFit.RecycleConflictNodes(), ROOT.RooFit.Silence())
+                if self.options.verbose:
+                    if i > 0: stderr.write("\b\b\b\b\b");
+                    stderr.write(". %4d" % (i+1))
+                    stderr.flush()
+            if channelBinParFlag and not self.options.noBOnly:
+                for idx in xrange(pdfs.getSize()):
+                    wrapper = ROOT.CMSHistFuncWrapper(pdfs[idx].GetName() + '_wrapper', '', pdfs.at(idx).getXVar(), pdfs.at(idx), prop, idx)
+                    wrapper.setStringAttribute("combine.process", pdfs.at(idx).getStringAttribute("combine.process"))
+                    wrapper.setStringAttribute("combine.channel", pdfs.at(idx).getStringAttribute("combine.channel"))
+                    self.extraImports.append(wrapper)
+
+        if self.options.verbose:
+            stderr.write("\b\b\b\bdone.\n"); stderr.flush()
     def doCombination(self):
         ## Contrary to Number-counting models, here each channel PDF already contains the nuisances
         ## So we just have to build the combined pdf
+        dupObjs = set()
+        dupNames = set()
         if len(self.DC.bins) > 1 or not self.options.forceNonSimPdf:
-            for (postfixIn,postfixOut) in [ ("","_s"), ("_bonly","_b") ]:
-                simPdf = ROOT.RooSimultaneous("model"+postfixOut, "model"+postfixOut, self.out.binCat)
+            if self.options.doMasks:
+                maskList = ROOT.RooArgList()
                 for b in self.DC.bins:
-                    pdfi = self.out.pdf("pdf_bin%s%s" % (b,postfixIn))
+                    maskList.add(self.out.arg(self.physics.getChannelMask(b)))
+            for (postfixIn,postfixOut) in [ ("","_s"), ("_bonly","_b") ]:
+                simPdf = ROOT.RooSimultaneous("model"+postfixOut, "model"+postfixOut, self.out.binCat) if self.options.noOptimizePdf else ROOT.RooSimultaneousOpt("model"+postfixOut, "model"+postfixOut, self.out.binCat)
+                for b in self.DC.bins:
+                    pdfi = self.getObj("pdf_bin%s%s" % (b,postfixIn))
+                    self.RenameDupObjs(dupObjs, dupNames, pdfi, b)
                     simPdf.addPdf(pdfi, b)
-                self.out._import(simPdf)
+                if (not self.options.noOptimizePdf) and self.options.doMasks:
+                    simPdf.addChannelMasks(maskList)
+                if len(self.DC.systs) and (not self.options.noOptimizePdf) and self.options.moreOptimizeSimPdf == "cms":
+                    simPdf.addExtraConstraints(self.out.nuisPdfs)
+                if self.options.verbose:
+                    stderr.write("Importing combined pdf %s\n" % simPdf.GetName()); stderr.flush()
+                self.out._import(simPdf, ROOT.RooFit.RecycleConflictNodes())
+                if self.options.noBOnly: break
         else:
-            self.out._import(self.out.pdf("pdf_bin%s"       % self.DC.bins[0]).clone("model_s"), ROOT.RooFit.Silence())
-            self.out._import(self.out.pdf("pdf_bin%s_bonly" % self.DC.bins[0]).clone("model_b"), ROOT.RooFit.Silence())
+            self.out._import(self.getObj("pdf_bin%s"       % self.DC.bins[0]).clone("model_s"), ROOT.RooFit.Silence())
+            if not self.options.noBOnly: 
+                self.out._import(self.getObj("pdf_bin%s_bonly" % self.DC.bins[0]).clone("model_b"), ROOT.RooFit.Silence())
+        for arg in self.extraImports:
+            #print 'Importing extra arg: %s' % arg.GetName()
+            self.out._import(arg, ROOT.RooFit.RecycleConflictNodes())
         if self.options.fixpars:
             pars = self.out.pdf("model_s").getParameters(self.out.obs)
             iter = pars.createIterator()
@@ -99,6 +239,21 @@ class ShapeBuilder(ModelBuilder):
                 if arg == None: break;
                 if arg.InheritsFrom("RooRealVar") and arg.GetName() != "r": 
                     arg.setConstant(True);
+
+    def RenameDupObjs(self, dupObjs, dupNames, newObj, postFix):
+        #print 'Checking for duplicates in %s' % newObj.GetName()
+        branchNodes = ROOT.RooArgList()
+        newObj.branchNodeServerList(branchNodes)
+        # branchNodes.Print('v')
+        for i in xrange(1, branchNodes.getSize()):
+            arg = branchNodes.at(i)
+            if arg.GetName() in dupNames and arg not in dupObjs:
+                print 'Object %s is duplicated' % arg.GetName()
+                arg.SetName(arg.GetName() + '_%s' % postFix)
+            # if arg.GetName() in dupNames and arg in dupObjs:
+                # print 'Objected %s is repeated' % arg.GetName()
+            dupObjs.add(arg)
+            dupNames.add(arg.GetName())
     ## --------------------------------------
     ## -------- High level helpers ----------
     ## --------------------------------------
@@ -107,6 +262,7 @@ class ShapeBuilder(ModelBuilder):
         self.pdfModes = {}
         for ib,b in enumerate(self.DC.bins):
             databins = {}; bgbins = {}
+            channelBinParFlag = b in self.DC.binParFlags.keys()
             for p in [self.options.dataname]+self.DC.exp[b].keys():
                 if len(self.DC.obs) == 0 and p == self.options.dataname: continue
                 if p != self.options.dataname and self.DC.exp[b][p] == 0: continue
@@ -116,6 +272,7 @@ class ShapeBuilder(ModelBuilder):
                         self.doVar("CMS_fakeObs[0,1]");
                         self.out.var("CMS_fakeObs").setBins(1);
                         self.doSet("CMS_fakeObsSet","CMS_fakeObs");
+			self.doVar("CMS_fakeWeight[0,1]");self.out.var("CMS_fakeWeight").removeRange()
                         shapeObs["CMS_fakeObsSet"] = self.out.set("CMS_fakeObsSet")
                     if p == self.options.dataname:
                         self.pdfModes[b] = 'binned'
@@ -124,6 +281,8 @@ class ShapeBuilder(ModelBuilder):
                         shapeTypes.append("RooAbsPdf");
                 elif shape.ClassName().startswith("TH1"):
                     shapeTypes.append("TH1"); shapeBins.append(shape.GetNbinsX())
+                    if channelBinParFlag:
+                        self.selfNormBins.append(b)
                     norm = shape.Integral()
                     if p == self.options.dataname: 
                         if self.options.poisson > 0 and norm > self.options.poisson:
@@ -155,6 +314,8 @@ class ShapeBuilder(ModelBuilder):
                     if p == self.options.dataname: self.pdfModes[b] = 'unbinned'
                 elif shape.InheritsFrom("RooAbsPdf"):
                     shapeTypes.append("RooAbsPdf");
+                elif shape.InheritsFrom("CMSHistFunc"):
+                    shapeTypes.append("CMSHistFunc");
                 else: raise RuntimeError, "Currently supporting only TH1s, RooDataHist and RooAbsPdfs"
                 if norm != 0:
                     if p == self.options.dataname:
@@ -173,7 +334,7 @@ class ShapeBuilder(ModelBuilder):
                     if i not in bgbins: stderr.write("Channel %s has bin %d fill in data but empty in all backgrounds\n" % (b,i))
         if shapeTypes.count("TH1"):
             self.out.maxbins = max(shapeBins)
-            if self.options.verbose: stderr.write("Will use binning variable CMS_th1x with %d bins\n" % self.out.maxbins)
+            if self.options.verbose > 1: stderr.write("Will use binning variable CMS_th1x with %d bins\n" % self.out.maxbins)
             self.doVar("CMS_th1x[0,%d]" % self.out.maxbins); self.out.var("CMS_th1x").setBins(self.out.maxbins)
             self.out.binVar = self.out.var("CMS_th1x")
             shapeObs['CMS_th1x'] = self.out.binVar
@@ -182,19 +343,19 @@ class ShapeBuilder(ModelBuilder):
             self.out.binVars = ROOT.RooArgSet(self.out.binVar)
         elif shapeTypes.count("RooDataSet") > 0 or shapeTypes.count("TTree") > 0 or len(shapeObs.keys()) > 1:
             self.out.mode = "unbinned"
-            if self.options.verbose: stderr.write("Will try to work with unbinned datasets\n")
-            if self.options.verbose: stderr.write("Observables: %s\n" % str(shapeObs.keys()))
+            if self.options.verbose > 1: stderr.write("Will work with unbinned datasets\n")
+            if self.options.verbose > 1: stderr.write("Observables: %s\n" % str(shapeObs.keys()))
             if len(shapeObs.keys()) != 1:
                 self.out.binVars = ROOT.RooArgSet()
                 for obs in shapeObs.values():
-                     self.out.binVars.add(obs, False)
+                     self.out.binVars.add(obs, True)
             else:
                 self.out.binVars = shapeObs.values()[0]
             self.out._import(self.out.binVars)
         else:
             self.out.mode = "binned"
-            if self.options.verbose: stderr.write("Will try to make a binned dataset\n")
-            if self.options.verbose: stderr.write("Observables: %s\n" % str(shapeObs.keys()))
+            if self.options.verbose > 1: stderr.write("Will make a binned dataset\n")
+            if self.options.verbose > 1: stderr.write("Observables: %s\n" % str(shapeObs.keys()))
             if len(shapeObs.keys()) != 1:
                 raise RuntimeError, "There's more than once choice of observables: %s\n" % str(shapeObs.keys())
             self.out.binVars = shapeObs.values()[0]
@@ -222,7 +383,7 @@ class ShapeBuilder(ModelBuilder):
     ## -------------------------------------
     def getShape(self,channel,process,syst="",_fileCache={},_cache={},allowNoSyst=False):
         if _cache.has_key((channel,process,syst)): 
-            if self.options.verbose > 1: print "recyling (%s,%s,%s) -> %s\n" % (channel,process,syst,_cache[(channel,process,syst)].GetName())
+            if self.options.verbose > 2: print "recyling (%s,%s,%s) -> %s\n" % (channel,process,syst,_cache[(channel,process,syst)].GetName())
             return _cache[(channel,process,syst)];
         postFix="Sig" if (process in self.DC.isSignal and self.DC.isSignal[process]) else "Bkg"
         bentry = None
@@ -245,6 +406,12 @@ class ShapeBuilder(ModelBuilder):
             names = [names[0], names[1]]
         strmass = "%d" % self.options.mass if self.options.mass % 1 == 0 else str(self.options.mass)
         finalNames = [ x.replace("$PROCESS",process).replace("$CHANNEL",channel).replace("$SYSTEMATIC",syst).replace("$MASS",strmass) for x in names ]
+	for mp in self.options.modelparams:
+	   if len(mp.split('='))!=2 : raise RuntimeError, "No value found for keyword in %s (use --keyword-value WORD=VALUE)"%mp 
+	   mpname, mpv = mp.split('=')
+	   protected_kwords =  ["PROCESS","CHANNEL","SYSTEMATIC","MASS"]
+	   if mpname in protected_kwords: raise RuntimeError, "Cannot use the following keywords (already assigned in combine): $"+" $".join(protected_kwords) 
+           finalNames = [ fn.replace("$%s"%mpname,mpv) for fn in finalNames ]
         if not _fileCache.has_key(finalNames[0]): 
             trueFName = finalNames[0]
             if not os.path.exists(trueFName) and not os.path.isabs(trueFName) and os.path.exists(self.options.baseDir+"/"+trueFName):
@@ -261,7 +428,10 @@ class ShapeBuilder(ModelBuilder):
             if self.wsp.ClassName() == "RooWorkspace":
                 ret = self.wsp.data(oname)
                 if not ret: ret = self.wsp.pdf(oname)
-                if not ret: raise RuntimeError, "Object %s in workspace %s in file %s does not exist or it's neither a data nor a pdf" % (oname, wname, finalNames[0])
+                if not ret: ret = self.wsp.function(oname)
+                if not ret:
+                    if allowNoSyst: return None
+                    raise RuntimeError, "Object %s in workspace %s in file %s does not exist or it's neither a data nor a pdf" % (oname, wname, finalNames[0])
                 # Fix the fact that more than one entry can refer to the same object
                 ret = ret.Clone()
                 ret.SetName("shape%s_%s_%s%s" % (postFix,process,channel, "_"+syst if syst else ""))
@@ -269,13 +439,16 @@ class ShapeBuilder(ModelBuilder):
                 if not syst:
                   normname = "%s_norm" % (oname)
                   norm = self.wsp.arg(normname)
+		  if norm==None: 
+			if normname in self.norm_rename_map.keys(): norm = self.wsp.arg(self.norm_rename_map[normname])
                   if norm: 
                     if normname in self.DC.flatParamNuisances: 
                         self.DC.flatParamNuisances[normname] = False # don't warn if not found
                         norm.setAttribute("flatParam")
                     norm.SetName("shape%s_%s_%s%s_norm" % (postFix,process,channel, "_"))
+		    self.norm_rename_map[normname]=norm.GetName()
                     self.out._import(norm, ROOT.RooFit.RecycleConflictNodes()) 
-                if self.options.verbose > 1: print "import (%s,%s) -> %s\n" % (finalNames[0],objname,ret.GetName())
+                if self.options.verbose > 2: print "import (%s,%s) -> %s\n" % (finalNames[0],objname,ret.GetName())
                 return ret;
             elif self.wsp.ClassName() == "TTree":
                 ##If it is a tree we will convert it in RooDataSet . Then we can decide if we want to build a
@@ -287,7 +460,7 @@ class ShapeBuilder(ModelBuilder):
                 rds = ROOT.RooDataSet("shape%s_%s_%s%s" % (postFix,process,channel, "_"+syst if syst else ""), "shape%s_%s_%s%s" % (postFix,process,channel, "_"+syst if syst else ""),self.wsp,ROOT.RooArgSet(self.out.var(oname)),"","__WEIGHT__")
                 rds.var = oname
                 _cache[(channel,process,syst)] = rds
-                if self.options.verbose > 1: print "import (%s,%s) -> %s\n" % (finalNames[0],wname,rds.GetName())
+                if self.options.verbose > 2: print "import (%s,%s) -> %s\n" % (finalNames[0],wname,rds.GetName())
                 return rds
             elif self.wsp.InheritsFrom("TH1"):
                 ##If it is a Histogram we will convert it in RooDataSet preserving the bins 
@@ -299,7 +472,7 @@ class ShapeBuilder(ModelBuilder):
                 self.doVar("%s[%f,%f]" % (oname,self.wsp.GetXaxis().GetXmin(),self.wsp.GetXaxis().GetXmax()))
                 rds = ROOT.RooDataHist(name, name, ROOT.RooArgList(self.out.var(oname)), self.wsp)
                 rds.var = oname
-                if self.options.verbose > 1: stderr.write("import (%s,%s) -> %s\n" % (finalNames[0],wname,rds.GetName()))
+                if self.options.verbose > 2: stderr.write("import (%s,%s) -> %s\n" % (finalNames[0],wname,rds.GetName()))
                 _neverDelete.append(rds)
                 return rds
             else:
@@ -310,7 +483,7 @@ class ShapeBuilder(ModelBuilder):
                 if allowNoSyst: return None
                 raise RuntimeError, "Failed to find %s in file %s (from pattern %s, %s)" % (objname,finalNames[0],names[1],names[0])
             ret.SetName("shape%s_%s_%s%s" % (postFix,process,channel, "_"+syst if syst else ""))
-            if self.options.verbose > 1: print "import (%s,%s) -> %s\n" % (finalNames[0],objname,ret.GetName())
+            if self.options.verbose > 2: print "import (%s,%s) -> %s\n" % (finalNames[0],objname,ret.GetName())
             _cache[(channel,process,syst)] = ret
             return ret
     def getData(self,channel,process,syst="",_cache={}):
@@ -319,14 +492,16 @@ class ShapeBuilder(ModelBuilder):
         postFix="Sig" if (process in self.DC.isSignal and self.DC.isSignal[process]) else "Bkg"
         if _cache.has_key((channel,process)): return _cache[(channel,process)]
         shapeNominal = self.getShape(channel,process)
-        nominalPdf = self.shape2Pdf(shapeNominal,channel,process)
+        nominalPdf = self.shape2Pdf(shapeNominal,channel,process) if (self.options.useHistPdf == "always" or shapeNominal == None) else shapeNominal
         if shapeNominal == None: return nominalPdf # no point morphing a fake shape
         morphs = []; shapeAlgo = None
+	channelBinParFlag = channel in self.DC.binParFlags.keys()
         for (syst,nofloat,pdf,args,errline) in self.DC.systs:
             if not "shape" in pdf: continue
             if errline[channel][process] == 0: continue
             allowNoSyst = (pdf[-1] == "?")
             pdf = pdf.replace("?","")
+            if pdf[-1] == "U": pdf = pdf[:-1]
             if shapeAlgo == None:  shapeAlgo = pdf
             elif pdf != shapeAlgo: 
                 errmsg =  "ERROR for channel %s, process %s. " % (channel,process)
@@ -334,18 +509,31 @@ class ShapeBuilder(ModelBuilder):
                 raise RuntimeError, errmsg+" One can use only one morphing algorithm for a given shape";
             if errline[channel][process] != 0:
                 if allowNoSyst and not self.isShapeSystematic(channel,process,syst): continue
-                shapeUp   = self.getShape(channel,process,syst+"Up")
-                shapeDown = self.getShape(channel,process,syst+"Down")
+		systShapeName = syst
+		if (syst,channel,process) in self.DC.systematicsShapeMap.keys(): systShapeName = self.DC.systematicsShapeMap[(syst,channel,process)]
+                shapeUp   = self.getShape(channel,process,systShapeName+"Up")
+                shapeDown = self.getShape(channel,process,systShapeName+"Down")
                 if shapeUp.ClassName()   != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
                 if shapeDown.ClassName() != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
-                morphs.append((syst,errline[channel][process],self.shape2Pdf(shapeUp,channel,process),self.shape2Pdf(shapeDown,channel,process)))
-        if len(morphs) == 0: return nominalPdf
+                if self.options.useHistPdf == "always":
+                    morphs.append((syst,errline[channel][process],self.shape2Pdf(shapeUp,channel,process),self.shape2Pdf(shapeDown,channel,process)))
+                else:
+                    morphs.append((syst,errline[channel][process],shapeUp,shapeDown))
+        if len(morphs) == 0:
+            if self.options.useHistPdf == "always":
+                return nominalPdf
+            else:
+                return self.shape2Pdf(shapeNominal,channel,process)
         if shapeAlgo == "shapeN": stderr.write("Warning: the shapeN implementation in RooStats and L&S are different\n")
-        pdfs = ROOT.RooArgList(nominalPdf)
+        pdfs = ROOT.RooArgList(nominalPdf) if self.options.useHistPdf == "always" else ROOT.TList()
+        if self.options.useHistPdf != "always": pdfs.Add(nominalPdf)
         coeffs = ROOT.RooArgList()
         minscale = 1
         for (syst,scale,pdfUp,pdfDown) in morphs:
-            pdfs.add(pdfUp); pdfs.add(pdfDown);
+            if self.options.useHistPdf == "always": 
+                pdfs.add(pdfUp); pdfs.add(pdfDown);
+            else:
+                pdfs.Add(pdfUp); pdfs.Add(pdfDown);
             if scale == 1:
                 coeffs.add(self.out.var(syst))
             else: # must scale it :-/
@@ -356,32 +544,100 @@ class ShapeBuilder(ModelBuilder):
             qalgo = 100
             shapeAlgo = shapeAlgo[:-1]
         if shapeAlgo == "shape": shapeAlgo = self.options.defMorph
-        if "shapeL" in shapeAlgo: qrange = 0;
+        if "shapeL"   in shapeAlgo:
+                raise RuntimeError, "No algorithm shapeL - this mode is depricated" 
+		#qrange = 0;
         elif "shapeN" in shapeAlgo: qalgo = -1;
+        if self.options.useHistPdf != "always":
+            if nominalPdf.InheritsFrom("TH1"):
+                rebins = ROOT.TList()
+                maxbins = 0
+                for i in xrange(pdfs.GetSize()):
+                    rebinned = self.rebinH1(pdfs.At(i))
+                    rebins.Add(rebinned)
+                    maxbins = max(maxbins, rebinned._original_bins)
+                if channelBinParFlag:
+                    rhp = ROOT.CMSHistFunc("shape%s_%s_%s_morph" % (postFix,channel,process), "", self.out.binVar, rebins[0])
+                    rhp.setVerticalMorphs(coeffs)
+                    rhp.setVerticalType(ROOT.CMSHistFunc.QuadLinear if qalgo >= 0 else ROOT.CMSHistFunc.LogQuadLinear)
+                    rhp.setVerticalSmoothRegion(qrange)
+                    rhp.prepareStorage()
+                    rhp.setShape(0, 0, 0, 0, rebins[0])
+                    for i in xrange(len(coeffs)):
+                        if self.DC.binParFlags[channel][2] in [2]:
+                            rhp.setShape(0, 0, i+1, 0, rebins[2 + i*2])
+                            rhp.setShape(0, 0, i+1, 1, rebins[1 + i*2])
+                        elif self.DC.binParFlags[channel][2] in [1]:
+                            renormLo = rebins[2 + i*2].Clone()
+                            if renormLo.Integral() > 0.:
+                                renormLo.Scale(rebins[0].Integral() / renormLo.Integral())
+                            renormHi = rebins[1 + i*2].Clone()
+                            if renormHi.Integral() > 0.:
+                                renormHi.Scale(rebins[0].Integral() / renormHi.Integral())
+                            rhp.setShape(0, 0, i+1, 0, renormLo)
+                            rhp.setShape(0, 0, i+1, 1, renormHi)
+                    if self.options.optimizeTemplateBins and maxbins < self.out.maxbins:
+                        #print "Optimizing binning: %d -> %d for %s " % (self.out.maxbins, maxbins, rhp.GetName())
+                        rhp.setActiveBins(maxbins)
+
+                else:
+                    rhp = ROOT.FastVerticalInterpHistPdf2("shape%s_%s_%s_morph" % (postFix,channel,process), "", self.out.binVar, rebins, coeffs, qrange, qalgo)
+                    if self.options.optimizeTemplateBins and maxbins < self.out.maxbins:
+                        #print "Optimizing binning: %d -> %d for %s " % (self.out.maxbins, maxbins, rhp.GetName())
+                        rhp.setActiveBins(maxbins) 
+                _cache[(channel,process)] = rhp
+                return rhp
+            elif nominalPdf.InheritsFrom("RooHistPdf") or nominalPdf.InheritsFrom("RooDataHist"):
+                nominalPdf = self.shape2Pdf(shapeNominal,channel,process)
+                pdfs.Clear(); ## now it contains "RooDataHist", it should contain "RooHistPdf"
+                pdfs.Add(nominalPdf)
+                for (syst,scale,shapeUp,shapeDown) in morphs:
+                    pdfs.Add(self.shape2Pdf(shapeUp,channel,process))
+                    pdfs.Add(self.shape2Pdf(shapeDown,channel,process))
+                histpdf =  nominalPdf if nominalPdf.InheritsFrom("RooDataHist") else nominalPdf.dataHist()
+                xvar = histpdf.get().first()
+                rhp = ROOT.FastVerticalInterpHistPdf2("shape%s_%s_%s_morph" % (postFix,channel,process), "", xvar, pdfs, coeffs, qrange, qalgo)
+                _cache[(channel,process)] = rhp
+                return rhp
+            else:
+                pdflist = ROOT.RooArgList()
+                nominalPdf = self.shape2Pdf(shapeNominal,channel,process)
+                pdflist.add(nominalPdf)
+                for (syst,scale,shapeUp,shapeDown) in morphs:
+                    pdflist.add(self.shape2Pdf(shapeUp,channel,process))
+                    pdflist.add(self.shape2Pdf(shapeDown,channel,process))
+                pdfs = pdflist
+		
         if "2a" in shapeAlgo: # old shape2
-            if not nominalPdf.InheritsFrom("RooHistPdf"):  raise RuntimeError, "Algorithms 'shape2', 'shapeL2', shapeN2' only work with histogram templates"
-            if nominalPdf.dataHist().get().getSize() != 1: raise RuntimeError, "Algorithms 'shape2', 'shapeL2', shapeN2' only work in one dimension"
+            if not nominalPdf.InheritsFrom("RooHistPdf"):  raise RuntimeError, "Algorithms 'shape2',  'shapeN2' only work with histogram templates"
+            if nominalPdf.dataHist().get().getSize() != 1: raise RuntimeError, "Algorithms 'shape2',  'shapeN2' only work in one dimension"
             xvar = nominalPdf.dataHist().get().first()
             _cache[(channel,process)] = ROOT.VerticalInterpHistPdf("shape%s_%s_%s_morph" % (postFix,channel,process), "", xvar, pdfs, coeffs, qrange, qalgo)
         elif "2" in shapeAlgo:  # new faster shape2
-            if not nominalPdf.InheritsFrom("RooHistPdf"):  raise RuntimeError, "Algorithms 'shape2', 'shapeL2', shapeN2' only work with histogram templates"
-            if nominalPdf.dataHist().get().getSize() != 1: raise RuntimeError, "Algorithms 'shape2', 'shapeL2', shapeN2' only work in one dimension"
+            if not nominalPdf.InheritsFrom("RooHistPdf"):  raise RuntimeError, "Algorithms 'shape2',  'shapeN2' only work with histogram templates"
+            if nominalPdf.dataHist().get().getSize() != 1: raise RuntimeError, "Algorithms 'shape2',  'shapeN2' only work in one dimension"
             xvar = nominalPdf.dataHist().get().first()
             _cache[(channel,process)] = ROOT.FastVerticalInterpHistPdf("shape%s_%s_%s_morph" % (postFix,channel,process), "", xvar, pdfs, coeffs, qrange, qalgo)
         else:
             _cache[(channel,process)] = ROOT.VerticalInterpPdf("shape%s_%s_%s_morph" % (postFix,channel,process), "", pdfs, coeffs, qrange, qalgo)
         return _cache[(channel,process)]
     def isShapeSystematic(self,channel,process,syst):
-        shapeUp = self.getShape(channel,process,syst+"Up",allowNoSyst=True)    
+    	systShapeName = syst
+	if (syst,channel,process) in self.DC.systematicsShapeMap.keys(): systShapeName = self.DC.systematicsShapeMap[(syst,channel,process)]
+        shapeUp = self.getShape(channel,process,systShapeName+"Up",allowNoSyst=True)    
         return shapeUp != None
     def getExtraNorm(self,channel,process):
+        if channel in self.selfNormBins and self.DC.binParFlags[channel][2] in [2]:
+            if self.options.verbose > 1:
+                print 'Skipping getExtraNorm for (%s,%s)' % (channel, process)
+            return None
         postFix="Sig" if (process in self.DC.isSignal and self.DC.isSignal[process]) else "Bkg"
         terms = []
         shapeNominal = self.getShape(channel,process)
         if shapeNominal == None: 
             # FIXME no extra norm for dummy pdfs (could be changed)
             return None
-        if shapeNominal.InheritsFrom("RooAbsPdf"): 
+        if shapeNominal.InheritsFrom("RooAbsPdf") or shapeNominal.InheritsFrom("CMSHistFunc"): 
             # return nominal multiplicative normalization constant
             normname = "shape%s_%s_%s%s_norm" % (postFix,process,channel, "_")
             if self.out.arg(normname): return [ normname ]
@@ -395,8 +651,10 @@ class ShapeBuilder(ModelBuilder):
             if "shape" not in pdf: continue
             if errline[channel][process] != 0:
                 if pdf[-1] == "?" and not self.isShapeSystematic(channel,process,syst): continue
-                shapeUp   = self.getShape(channel,process,syst+"Up")
-                shapeDown = self.getShape(channel,process,syst+"Down")
+		systShapeName = syst
+	        if (syst,channel,process) in self.DC.systematicsShapeMap.keys(): systShapeName = self.DC.systematicsShapeMap[(syst,channel,process)]
+                shapeUp   = self.getShape(channel,process,systShapeName+"Up")
+                shapeDown = self.getShape(channel,process,systShapeName+"Down")
                 if shapeUp.ClassName()   != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst" % (channel,process,syst)
                 if shapeDown.ClassName() != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst" % (channel,process,syst)
                 kappaUp,kappaDown = 1,1
@@ -411,9 +669,19 @@ class ShapeBuilder(ModelBuilder):
                 # if errline[channel][process] == <x> it means the gaussian should be scaled by <x> before doing pow
                 # for convenience, we scale the kappas
                 kappasScaled = [ pow(x, errline[channel][process]) for x in kappaDown,kappaUp ]
-                self.doObj( "systeff_%s_%s_%s" % (channel,process,syst), "AsymPow", "%f,%f,%s" % (kappasScaled[0], kappasScaled[1], syst) ) 
+                obj_kappaDown = self.addObj(ROOT.RooConstVar, '%f' %  kappasScaled[0], "", float('%f' %  kappasScaled[0]))
+                obj_kappaUp = self.addObj(ROOT.RooConstVar, '%f' %  kappasScaled[1], "", float('%f' %  kappasScaled[1]))
+                obj_var = self.out.var(syst)
+                self.addObj(ROOT.AsymPow, "systeff_%s_%s_%s" % (channel,process,syst), "", obj_kappaDown, obj_kappaUp, obj_var)
                 terms.append( "systeff_%s_%s_%s" % (channel,process,syst) )
         return terms if terms else None;
+    def rebinH1(self,shape):
+        rebinh1 = ROOT.TH1F(shape.GetName()+"_rebin", "", self.out.maxbins, 0.0, float(self.out.maxbins))
+        for i in range(1,min(shape.GetNbinsX(),self.out.maxbins)+1): 
+            rebinh1.SetBinContent(i, shape.GetBinContent(i))
+            rebinh1.SetBinError(i, shape.GetBinError(i))
+        rebinh1._original_bins = shape.GetNbinsX()
+        return rebinh1;
     def shape2Data(self,shape,channel,process,_cache={}):
         postFix="Sig" if (process in self.DC.isSignal and self.DC.isSignal[process]) else "Bkg"
         if shape == None:
@@ -427,20 +695,17 @@ class ShapeBuilder(ModelBuilder):
                     rdh.set(obs, self.DC.obs[channel])
                     _cache[name] = rdh
                 else:
-                    rds = ROOT.RooDataSet(name, name, obs)
-                    if self.DC.obs[channel] == float(int(self.DC.obs[channel])):
-                        for i in range(int(self.DC.obs[channel])): rds.add(obs)
-                    else:
-                        rds.add(obs, self.DC.obs[channel])
+		    obs.add(self.out.var("CMS_fakeWeight"))
+                    rds = ROOT.RooDataSet(name, name, obs,"CMS_fakeWeight")
+		    obs.setRealValue("CMS_fakeWeight", self.DC.obs[channel])
+                    rds.add(obs, self.DC.obs[channel])
                     _cache[name] = rds
             return _cache[name]
         if not _cache.has_key(shape.GetName()):
             if shape.ClassName().startswith("TH1"):
-                rebinh1 = ROOT.TH1F(shape.GetName()+"_rebin", "", self.out.maxbins, 0.0, float(self.out.maxbins))
-                for i in range(1,min(shape.GetNbinsX(),self.out.maxbins)+1): 
-                    rebinh1.SetBinContent(i, shape.GetBinContent(i))
+                rebinh1 = self.rebinH1(shape)
                 rdh = ROOT.RooDataHist(shape.GetName(), shape.GetName(), ROOT.RooArgList(self.out.binVar), rebinh1)
-                self.out._import(rdh)
+                #self.out._import(rdh)
                 _cache[shape.GetName()] = rdh
             elif shape.ClassName() in ["RooDataHist", "RooDataSet"]:
                 return shape
@@ -448,6 +713,7 @@ class ShapeBuilder(ModelBuilder):
         return _cache[shape.GetName()]
     def shape2Pdf(self,shape,channel,process,_cache={}):
         postFix="Sig" if (process in self.DC.isSignal and self.DC.isSignal[process]) else "Bkg"
+	channelBinParFlag = channel in self.DC.binParFlags.keys()
         if shape == None:
             name = "shape%s_%s_%s" % (postFix,channel,process)
             if not _cache.has_key(name):
@@ -455,22 +721,49 @@ class ShapeBuilder(ModelBuilder):
             return _cache[name]
         if not _cache.has_key(shape.GetName()+"Pdf"):
             if shape.ClassName().startswith("TH1"):
-                rdh = self.shape2Data(shape,channel,process)
-                rhp = self.doObj("%sPdf" % shape.GetName(), "HistPdf", "{%s}, %s" % (self.out.binVar.GetName(), shape.GetName()))
-                _cache[shape.GetName()+"Pdf"] = rhp
+                if self.options.useHistPdf == "never":
+                    shape = self.rebinH1(shape)
+                    list = ROOT.TList(); list.Add(shape);
+                    if channelBinParFlag:
+                        rhp = ROOT.CMSHistFunc("%sPdf" % shape.GetName(), "", self.out.binVar, shape)
+                        rhp.prepareStorage()
+                        rhp.setShape(0, 0, 0, 0, shape)
+                        if self.options.optimizeTemplateBins:
+                            rhp.setActiveBins(shape._original_bins)
+                    else:
+                        rhp = ROOT.FastVerticalInterpHistPdf2("%sPdf" % shape.GetName(), "", self.out.binVar, list, ROOT.RooArgList())
+                    _cache[shape.GetName()+"Pdf"] = rhp
+                else:
+                    rdh = self.shape2Data(shape,channel,process)
+                    rhp = ROOT.RooHistPdf("%sPdf" % shape.GetName(), "", ROOT.RooArgSet(self.out.binVar), rdh)
+                    rhp.rdh = rdh # so it doesn't get deleted
+                    _cache[shape.GetName()+"Pdf"] = rhp
             elif shape.InheritsFrom("RooAbsPdf"):
+                if shape.ClassName() == "RooExtendPdf": 
+                    raise RuntimeError, "Error in channel %s, process %s: pdf %s is a RooExtendPdf, this is not supported" % (channel,process,shape.GetName())
+                elif shape.ClassName() == "RooAddPdf":
+                    self.checkRooAddPdf(channel,process,shape)
                 _cache[shape.GetName()+"Pdf"] = shape
             elif shape.InheritsFrom("RooDataHist"):
                 rhp = ROOT.RooHistPdf("%sPdf" % shape.GetName(), "", shape.get(), shape) 
-                self.out._import(rhp)
                 _cache[shape.GetName()+"Pdf"] = rhp
             elif shape.InheritsFrom("RooDataSet"):
                 rkp = ROOT.RooKeysPdf("%sPdf" % shape.GetName(), "", self.out.var(shape.var), shape,3,1.5); 
-                self.out._import(rkp)
                 _cache[shape.GetName()+"Pdf"] = rkp
-            else: 
+            elif shape.InheritsFrom("CMSHistFunc"):
+                _cache[shape.GetName()+"Pdf"] = shape
+            else:
                 raise RuntimeError, "shape2Pdf not implemented for %s" % shape.ClassName()
         return _cache[shape.GetName()+"Pdf"]
+    def checkRooAddPdf(self,channel,process,pdf):
+        coeflist = pdf.coefList()
+        if (coeflist.getSize() == pdf.pdfList().getSize()-1):
+            return True
+        sum = 0.0
+        for i in xrange(coeflist.getSize()):
+            sum += coeflist.at(i).getVal()
+        if abs(sum-1.0) > 1e-4:
+            raise RuntimeError, "Error in channel %s, process %s: RooAddPdf %s has coefficients that sum up to %g, and not to unity. This is not supported (but it could be supported on request).\n" % (channel,process,pdf.GetName(),sum)
     def argSetToString(self,argset):
         names = []
         it = argset.createIterator()
@@ -479,4 +772,20 @@ class ShapeBuilder(ModelBuilder):
             if not arg: break
             names.append(arg.GetName())
         return ",".join(names)
+    def optimizeExistingTemplates(self,pdf):
+        if pdf.ClassName() == "FastVerticalInterpHistPdf2D":
+            return ROOT.FastVerticalInterpHistPdf2D2(pdf, "%s_opt" % pdf.GetName())
+        elif pdf.ClassName() == "RooProdPdf" and pdf.pdfList().getSize() == 2:
+            f1 = pdf.pdfList().at(0)
+            f2 = pdf.pdfList().at(1)
+            #pdf.Print("")
+            if f2.ClassName() == "FastVerticalInterpHistPdf2D" and f2.conditional():
+                f1 = self.optimizeExistingTemplates(f1)
+                f2 = ROOT.FastVerticalInterpHistPdf2D2(f2, "%s_opt" % f2.GetName()) 
+                ret = ROOT.RooProdPdf("%s_opt" % pdf.GetName(), "", ROOT.RooArgSet(f1), ROOT.RooFit.Conditional(ROOT.RooArgSet(f2),ROOT.RooArgSet(f2.y())))
+                ret.optf2 = f2
+                ret.optf1 = f1
+                #print "Optimize %s in \t" % (pdf.GetName()),; ret.Print("")
+                return ret
+        return pdf
 

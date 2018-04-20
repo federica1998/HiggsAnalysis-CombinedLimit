@@ -13,8 +13,8 @@
  * with or without modification, are permitted according to the terms        *
  * listed in LICENSE (http://roofit.sourceforge.net/license.txt)             *
  *****************************************************************************/
-#ifndef ROO_EXPONENTIAL
-#define ROO_EXPONENTIAL
+#ifndef HiggsAnalysis_CombinedLimit_HGGRooPdfs_h
+#define HiggsAnalysis_CombinedLimit_HGGRooPdfs_h
 
 #include "RooAbsPdf.h"
 #include "RooRealProxy.h"
@@ -33,6 +33,8 @@ public:
 
   Int_t getAnalyticalIntegral(RooArgSet& allVars, RooArgSet& analVars, const char* rangeName=0) const ;
   Double_t analyticalIntegral(Int_t code, const char* rangeName=0) const ;
+  const RooAbsReal & base() const { return x.arg(); }
+  const RooAbsReal & exponent() const { return c.arg(); }
 
 protected:
   RooRealProxy x;
