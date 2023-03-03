@@ -23,6 +23,7 @@ class SMHiggsBuilder:
         if process == "bbH":  self.textToSpline("SM_XS_bbH_"+energy,  os.path.join(self.xspath, energy+"-bbH.txt") );
         if process == "tHq":  self.textToSpline("SM_XS_tHq_"+energy,  os.path.join(self.xspath, energy+"-tHq.txt") );
         if process == "tHW":  self.textToSpline("SM_XS_tHW_"+energy,  os.path.join(self.xspath, energy+"-tHW.txt") );
+        if process == "ggZH": self.textToSpline("SM_XS_ggZH_"+energy, os.path.join(self.xspath, energy+"-ggZH.txt") );
         if process == "VH":  
             makeXS("WH", energy); makeXS("ZH", energy);
             self.modelBuilder.factory_('sum::SM_XS_VH_'+energy+'(SM_XS_WH_'+energy+',SM_XS_ZH_'+energy+')')
