@@ -1,4 +1,4 @@
-from sys import stdout, stderr
+from sys import stdout, stderr, exit
 import os.path
 import ROOT
 from collections import defaultdict
@@ -516,6 +516,9 @@ class ShapeBuilder(ModelBuilder):
                     raise RuntimeError, "Object %s in workspace %s in file %s does not exist or it's neither a data nor a pdf" % (oname, wname, finalNames[0])
                 # Fix the fact that more than one entry can refer to the same object
                 ret = ret.Clone("shape%s_%s_%s%s" % (postFix,process,channel, "_"+syst if syst else ""))
+                if self.options.removeMultiPdf and ret.InheritsFrom("RooMultiPdf"):
+                    print ("removeMultiPdf",process,channel,oname,"current index",ret.getCurrentIndex())
+                    ret=ret.getCurrentPdf().Clone(ret.GetName())
                 if self.options.optimizeMHDependency and ret.InheritsFrom("RooAbsReal"):
                     ret = self.optimizeMHDependency(ret,self.wsp)
                 _cache[(channel,process,syst)] = ret
@@ -602,8 +605,8 @@ class ShapeBuilder(ModelBuilder):
 		if (syst,channel,process) in self.DC.systematicsShapeMap.keys(): systShapeName = self.DC.systematicsShapeMap[(syst,channel,process)]
                 shapeUp   = self.getShape(channel,process,systShapeName+"Up")
                 shapeDown = self.getShape(channel,process,systShapeName+"Down")
-                if shapeUp.ClassName()   != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
-                if shapeDown.ClassName() != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
+                if shapeUp.ClassName()   != shapeNominal.ClassName() and nominalPdf.ClassName()!="RooParametricHist": raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
+                if shapeDown.ClassName() != shapeNominal.ClassName() and nominalPdf.ClassName()!="RooParametricHist": raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
                 if self.options.useHistPdf == "always":
                     morphs.append((syst,errline[channel][process],self.shape2Pdf(shapeUp,channel,process),self.shape2Pdf(shapeDown,channel,process)))
                 else:
@@ -688,6 +691,13 @@ class ShapeBuilder(ModelBuilder):
                 rhp = ROOT.FastVerticalInterpHistPdf2("shape%s_%s_%s_morph" % (postFix,channel,process), "", xvar, pdfs, coeffs, qrange, qalgo)
                 _cache[(channel,process)] = rhp
                 return rhp
+	    elif nominalPdf.InheritsFrom("RooParametricHist") : 
+	        # Add the shape morphs to it. Cannot pass a collection of DataHists so we have to convert to PDFs first?! 
+                for (syst,scale,shapeUp,shapeDown) in morphs:
+		  nominalPdf.addMorphs(shapeUp,shapeDown,coeffs.find(syst),qrange)
+                _cache[(channel,process)] = nominalPdf
+		return nominalPdf
+	
             else:
                 pdflist = ROOT.RooArgList()
                 nominalPdf = self.shape2Pdf(shapeNominal,channel,process)
@@ -726,7 +736,7 @@ class ShapeBuilder(ModelBuilder):
         if shapeNominal == None: 
             # FIXME no extra norm for dummy pdfs (could be changed)
             return None
-        if shapeNominal.InheritsFrom("RooAbsPdf") or shapeNominal.InheritsFrom("CMSHistFunc"): 
+        if shapeNominal.InheritsFrom("RooAbsPdf") and not shapeNominal.InheritsFrom("RooParametricHist") or shapeNominal.InheritsFrom("CMSHistFunc"): 
             # return nominal multiplicative normalization constant
             normname = "shape%s_%s_%s%s_norm" % (postFix,process,channel, "_")
             if self.out.arg(normname): return [ normname ]
@@ -734,6 +744,10 @@ class ShapeBuilder(ModelBuilder):
         normNominal = 0
         if shapeNominal.InheritsFrom("TH1"): normNominal = shapeNominal.Integral()
         elif shapeNominal.InheritsFrom("RooDataHist"): normNominal = shapeNominal.sumEntries()
+	elif shapeNominal.InheritsFrom("RooParametricHist"): 
+	   normNominal = shapeNominal.quickSum()
+           normname = "shape%s_%s_%s%s_norm" % (postFix,process,channel, "_")
+           if self.out.arg(normname): terms.append(normname) 
         else: return None    
         if normNominal == 0: raise RuntimeError, "Null norm for channel %s, process %s" % (channel,process)
         for (syst,nofloat,pdf,args,errline) in self.DC.systs:
@@ -744,12 +758,12 @@ class ShapeBuilder(ModelBuilder):
 	        if (syst,channel,process) in self.DC.systematicsShapeMap.keys(): systShapeName = self.DC.systematicsShapeMap[(syst,channel,process)]
                 shapeUp   = self.getShape(channel,process,systShapeName+"Up")
                 shapeDown = self.getShape(channel,process,systShapeName+"Down")
-                if shapeUp.ClassName()   != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst" % (channel,process,syst)
-                if shapeDown.ClassName() != shapeNominal.ClassName(): raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst" % (channel,process,syst)
+                if shapeUp.ClassName()   != shapeNominal.ClassName() and shapeNominal.ClassName()!="RooParametricHist": raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
+                if shapeDown.ClassName() != shapeNominal.ClassName() and shapeNominal.ClassName()!="RooParametricHist": raise RuntimeError, "Mismatched shape types for channel %s, process %s, syst %s" % (channel,process,syst)
                 kappaUp,kappaDown = 1,1
                 if shapeNominal.InheritsFrom("TH1"):
                     kappaUp,kappaDown = shapeUp.Integral(),shapeDown.Integral()
-                elif shapeNominal.InheritsFrom("RooDataHist"):
+                elif shapeNominal.InheritsFrom("RooDataHist") or shapeNominal.InheritsFrom("RooParametricHist"):
                     kappaUp,kappaDown = shapeUp.sumEntries(),shapeDown.sumEntries()
                 if not kappaUp > 0: raise RuntimeError, "Bogus norm %r for channel %s, process %s, systematic %s Up" % (kappaUp, channel,process,syst)
                 if not kappaDown > 0: raise RuntimeError, "Bogus norm %r for channel %s, process %s, systematic %s Down" % (kappaDown, channel,process,syst)

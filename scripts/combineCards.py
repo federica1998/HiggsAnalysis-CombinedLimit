@@ -41,13 +41,13 @@ nuisanceEdits = [];
 
 def compareParamSystLines(a,b):
   if float(a[0])!=float(b[0]): return False
-  if "/" in a[1]: 
+  if "/" in a[1]:
     if "/" not in b[1] : return False
     a1,a2 = a[1].split("/")
     b1,b2 = b[1].split("/")
     if float(a1)!=float(b1): return False
     if float(a2)!=float(b2): return False
-  else: 
+  else:
     if float(a[1])!=float(a[1]): return False
   return True
 
@@ -93,7 +93,7 @@ for ich,fname in enumerate(args):
         systeffect = {}
         if pdf == "param":
             if paramSysts.has_key(lsyst):
-               #if paramSysts[lsyst] != pdfargs: 
+               #if paramSysts[lsyst] != pdfargs:
 	       if not compareParamSystLines(paramSysts[lsyst],pdfargs) : raise RuntimeError, "Parameter uncerainty %s mismatch between cards, %g != %g" % lsyst
             else:
                 paramSysts[lsyst] = pdfargs
@@ -166,12 +166,14 @@ for ich,fname in enumerate(args):
             p2sMapD = DC.shapeMap['*'] if DC.shapeMap.has_key('*') else {}
             for p, x in p2sMap.items():
                 xrep = [xi.replace("$CHANNEL",b) for xi in x]
-                if xrep[0] != 'FAKE' and dirname != '': xrep[0] = dirname+"/"+xrep[0]
+                if xrep[0] != 'FAKE' and dirname != '' and not xrep[0].startswith("/"):
+                    xrep[0] = dirname+"/"+xrep[0]
                 shapeLines.append((p,bout,xrep))
             for p, x in p2sMapD.items():
                 if p2sMap.has_key(p): continue
                 xrep = [xi.replace("$CHANNEL",b) for xi in x]
-                if xrep[0] != 'FAKE' and dirname != '': xrep[0] = dirname+"/"+xrep[0]
+                if xrep[0] != 'FAKE' and dirname != '' and not xrep[0].startswith("/"):
+                    xrep[0] = dirname+"/"+xrep[0]
                 shapeLines.append((p,bout,xrep))
     elif options.shape:
         for b in DC.bins:
@@ -197,16 +199,19 @@ for ich,fname in enumerate(args):
     # Finally report nuisance edits propagated to end of card
     for editline in DC.nuisanceEditLines:
       if len(editline)==2: nuisanceEdits.append("%s %s"%(editline[0]," ".join(editline[1])))
+      elif len(editline)==4 and not editline[3]: nuisanceEdits.append(" ".join(editline[0:3]))
       else:
-
         tmp_chan = editline[2]
         tmp_proc = editline[1]
         if tmp_chan == "*": # all channels
           tmp_chan = "%s(%s)"%(label,"|".join(c for c in DC.bins)) if len (DC.bins)>1 else label
+	  if "ifexists" not in editline[3]: editline[3].append("ifexists")
 	else: tmp_chan = label+tmp_chan
         if tmp_proc == "*":
           tmp_proc = "(%s)"%("|".join(p for p in DC.processes))
+	  if "ifexists" not in editline[3]: editline[3].append("ifexists")
         nuisanceEdits.append("%s %s %s %s"%(editline[0],tmp_proc,tmp_chan," ".join(editline[3])))
+
 
 bins = []
 check_processes = {}
@@ -310,6 +315,11 @@ for bpf in binParFlags.iterkeys():
       print "%s autoMCStats %g %i %i" % (bpf,binParFlags[bpf][0], binParFlags[bpf][1], binParFlags[bpf][2])
 
 nuisanceEdits = set(nuisanceEdits)
+nuisanceEdits_lengths = [ [len(e.split()),e] for e in nuisanceEdits ]
+nuisanceEdits_lengths = sorted(nuisanceEdits_lengths,reverse=True)
+nuisanceEdits = [e[1] for e in nuisanceEdits_lengths]
+nuisanceEdits_lengths = 0
+
 for edit in nuisanceEdits:
     print "nuisance edit ", edit
 

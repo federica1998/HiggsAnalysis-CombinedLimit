@@ -307,13 +307,13 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooA
 	RooAbsArg *rfloat = ret->floatParsFinal().find(r.GetName());
   // r might be a bin-by-bin parameter that was minimzed analytically,
   // therefore not appearing in floatParsFinal().
-	if (!rfloat && !runtimedef::get("MINIMIZER_analytic")) {
+	if (!rfloat && runtimedef::get("MINIMIZER_no_analytic")) {
                 fprintf(sentry.trueStdOut(), "Skipping %s. Looks like the last fit did not float this parameter. You could try running --algo grid to get the errors.\n",r.GetName());
 		continue ;
 		// Add the constant parameters in case previous fit was last iteration of a "discrete parameters loop"
 		//rfloat = ret->constPars().find(r.GetName());
 		//fitwasconst = true;
-	} else if (!rfloat && runtimedef::get("MINIMIZER_analytic")) {
+	} else if (!rfloat && !runtimedef::get("MINIMIZER_no_analytic")) {
     rfloat = ret->constPars().find(r.GetName());
     if (!rfloat) {
       fprintf(sentry.trueStdOut(), "Skipping %s. Parameter not found in the RooFitResult.\n",r.GetName());
@@ -411,7 +411,7 @@ double FitterAlgoBase::findCrossing(CascadeMinimizer &minim, RooAbsReal &nll, Ro
     bool ok = false;
     {
         CloseCoutSentry sentry(verbose < 3);    
-        ok = minim.improve(verbose-1);
+        ok = minim.minimize(verbose-1);
         checkpoint.reset(minim.save());
     }
     if (!ok && !keepFailures_) { 
@@ -437,7 +437,7 @@ double FitterAlgoBase::findCrossing(CascadeMinimizer &minim, RooAbsReal &nll, Ro
             ok = false;
         } else {
             CloseCoutSentry sentry(verbose < 3);    
-            ok = minim.improve(verbose-1);
+            ok = minim.minimize(verbose-1);
         }
         if (!ok && !keepFailures_) { 
             nfail++;

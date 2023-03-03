@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <unistd.h>
 #include <errno.h>
+#include <sstream>
 
 #include <TCanvas.h>
 #include <TFile.h>
@@ -92,9 +93,11 @@ std::string setPhysicsModelParameterRangeExpression_ = "";
 std::string defineBackgroundOnlyModelParameterExpression_ = "";
 
 std::string Combine::trackParametersNameString_="";
+std::string Combine::trackErrorsNameString_="";
 std::string Combine::textToWorkspaceString_="";
 
 std::vector<std::pair<RooAbsReal*,float> > Combine::trackedParametersMap_;
+std::vector<std::pair<RooRealVar*,float> > Combine::trackedErrorsMap_;
 
 Combine::Combine() :
     statOptions_("Common statistics options"),
@@ -155,6 +158,7 @@ Combine::Combine() :
       ("genUnbinnedChannels", po::value<std::string>(&genAsUnbinned_)->default_value(genAsUnbinned_), "Flag the given channels to be generated unbinned (irrespectively of how they were flagged at workspace creation)") 
       ("text2workspace",   boost::program_options::value<std::string>(&textToWorkspaceString_)->default_value(""), "Pass along options to text2workspace (default = none)")
       ("trackParameters",   boost::program_options::value<std::string>(&trackParametersNameString_)->default_value(""), "Keep track of parameters in workspace, also accepts regexp with syntax 'rgx{<my regexp>}' (default = none)")
+      ("trackErrors",   boost::program_options::value<std::string>(&trackErrorsNameString_)->default_value(""), "Keep track of errors on parameters in workspace, also accepts regexp with syntax 'rgx{<my regexp>}' (default = none)")
       ; 
 }
 
@@ -260,13 +264,11 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
       unlink(tmpFile); // this is to be deleted, since we'll use tmpFile+".root"
   }
 
-  bool isTextDatacard = false, isBinary = false;
-  TString fileToLoad = (hlfFile[0] == '/' ? hlfFile : pwd+"/"+hlfFile);
-  if (!boost::filesystem::exists(fileToLoad.Data())) throw std::invalid_argument(("File "+fileToLoad+" does not exist").Data());
-  if (hlfFile.EndsWith(".hlf") ) {
+  bool isTextDatacard = false, isBinary = hlfFile.EndsWith(".root");
+  TString fileToLoad = ((hlfFile[0] == '/' || hlfFile.Contains("://")) ? hlfFile : pwd+"/"+hlfFile);
+  if (!(fileToLoad.Contains("://") && isBinary) && !boost::filesystem::exists(fileToLoad.Data())) throw std::invalid_argument(("File "+fileToLoad+" does not exist").Data());
+  if (hlfFile.EndsWith(".hlf") || isBinary) {
     // nothing to do
-  } else if (hlfFile.EndsWith(".root")) {
-    isBinary = true;
   } else {
     TString txtFile = fileToLoad.Data();
     TString options = TString::Format(" -m %f -D %s", mass_, dataset.c_str());
@@ -304,6 +306,7 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
 
   if (isBinary) {
     TFile *fIn = TFile::Open(fileToLoad); 
+    if (!fIn) throw std::runtime_error(("Could not open file "+fileToLoad).Data());
     garbageCollect.tfile = fIn; // request that we close this file when done
 
     w = dynamic_cast<RooWorkspace *>(fIn->Get(workspaceName_.c_str()));
@@ -665,7 +668,11 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
           boost::split(nuisToFreeze, freezeNuisances_, boost::is_any_of(","), boost::token_compress_on);
           for (int k=0; k<(int)nuisToFreeze.size(); k++) {
               if (nuisToFreeze[k]=="") continue;
-              if (!w->fundArg(nuisToFreeze[k].c_str())) {
+              else if(nuisToFreeze[k]=="allConstrainedNuisances") {
+                  toFreeze.add(*nuisances);
+                  continue;
+              }
+              else if (!w->fundArg(nuisToFreeze[k].c_str())) {
                   std::cout<<"WARNING: cannot freeze nuisance parameter "<<nuisToFreeze[k].c_str()<<" if it doesn't exist!"<<std::endl;
                   continue;
               }
@@ -808,44 +815,10 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
 
   tree_ = tree;
 
-  // Set up additional branches 
-  if(trackParametersNameString_!=""){
-    char tmp[10240] ;
-    strlcpy(tmp,trackParametersNameString_.c_str(),10240) ;
-    char* token = strtok(tmp,",") ;
-    while(token) {
-      if (boost::starts_with(token, "rgx{") && boost::ends_with(token, "}")) {
-          std::string tokenstr(token);
-          std::string reg_esp = tokenstr.substr(4, tokenstr.size()-5);
-          std::cout<<"interpreting "<<reg_esp<<" as regex "<<std::endl;
-          std::regex rgx( reg_esp, std::regex::ECMAScript);
+  // Set up additional branches
+  addBranches(trackParametersNameString_,w,trackedParametersMap_,"Param");
+  addBranches(trackErrorsNameString_,w,trackedErrorsMap_,"Error");
 
-          RooArgSet allParams(w->allVars());
-          std::auto_ptr<TIterator> iter(allParams.createIterator());
-          for (RooAbsArg *a = (RooAbsArg*) iter->Next(); a != 0; a = (RooAbsArg*) iter->Next()) {
-              RooAbsReal *tmp = dynamic_cast<RooAbsReal *>(a);
-              const std::string &target = tmp->GetName();
-              std::smatch match;
-              if (std::regex_match(target, match, rgx)) {
-                  if (tmp->isConstant()) continue;
-                  Combine::trackedParametersMap_.push_back(std::pair<RooAbsReal*,float>(tmp,tmp->getVal()));
-              }
-          }
-          token = strtok(0,",") ;
-      } else {
-          RooAbsReal *a =(RooAbsReal*)w->obj(token); 
-          if (a == 0) throw std::invalid_argument(std::string("Parameter ")+(token)+" not in model.");
-          Combine::trackedParametersMap_.push_back(std::pair<RooAbsReal*,float>(a,a->getVal()));
-          token = strtok(0,",") ;
-      } 
-
-    }
-  }
-  
-  for (std::vector<std::pair<RooAbsReal*,float> >::iterator it = Combine::trackedParametersMap_.begin(); it!=Combine::trackedParametersMap_.end();it++){
-    const char * token = (it->first)->GetName();
-    addBranch((std::string("trackedParam_")+token).c_str(), &(it->second), (std::string("trackedParam_")+token+std::string("/F")).c_str()); 
-  }
   // Should have the PDF at this point, if not something is really odd?
   if (!(mc->GetPdf())){
 	std::cerr << " FATAL ERROR! PDF not found in ModelConfig. \n Try to build the workspace first with text2workspace.py and run with the binary output." << std::endl;
@@ -927,7 +900,7 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
   }
 
   // Warn the user that they might be using funky values of POIs 
-  if (!expectSignalSet_ && setPhysicsModelParameterExpression_ == "") { 
+  if (!expectSignalSet_ && setPhysicsModelParameterExpression_ == "" && !(POI->getSize()==1 && POI->find("r"))) {
 	  std::cerr << "Warning! -- You haven't picked default values for the Parameters of Interest (either with --expectSignal or --setParameters) for generating toys. Combine will use the 'B-only' ModelConfig to generate, which may lead to undesired behaviour if not using the default Physics Model" << std::endl;	  
   }	
   // Ok now we're ready to go lets save a "clean snapshot" for the current parameters state
@@ -1186,8 +1159,11 @@ void Combine::commitPoint(bool expected, float quantile) {
     Float_t saveQuantile =  g_quantileExpected_;
     g_quantileExpected_ = quantile;
 
-    for (std::vector<std::pair<RooAbsReal*,float> >::iterator it = Combine::trackedParametersMap_.begin(); it!=Combine::trackedParametersMap_.end();it++){
-	it->second = (it->first)->getVal();
+    for (auto& it : trackedParametersMap_){
+      it.second = (it.first)->getVal();
+    }
+    for (auto& it : trackedErrorsMap_){
+      it.second = (it.first)->getError();
     }
 
     if (g_fillTree_) tree_->Fill();
@@ -1278,4 +1254,42 @@ void Combine::addDiscreteNuisances(RooWorkspace *w){
 	if (! (v->isConstant())) (CascadeMinimizerGlobalConfigs::O().allRooMultiPdfParams).add(*v) ;
       }
     }
+}
+
+template <class Var>
+void Combine::addBranches(const std::string& trackString, RooWorkspace* w, std::vector<std::pair<Var*,float>>& trackMap, const std::string& vtype) {
+  if(trackString!=""){
+    std::stringstream ss(trackString);
+    std::string token;
+    while(std::getline(ss,token,',')) {
+      if (boost::starts_with(token, "rgx{") && boost::ends_with(token, "}")) {
+          std::string reg_esp = token.substr(4, token.size()-5);
+          std::cout<<"interpreting "<<reg_esp<<" as regex "<<std::endl;
+          std::regex rgx( reg_esp, std::regex::ECMAScript);
+
+          RooArgSet allParams(w->allVars());
+          std::auto_ptr<TIterator> iter(allParams.createIterator());
+          for (RooAbsArg *a = (RooAbsArg*) iter->Next(); a != 0; a = (RooAbsArg*) iter->Next()) {
+              Var *tmp = dynamic_cast<Var *>(a);
+              if(tmp==nullptr) continue;
+              const std::string &target = tmp->GetName();
+              std::smatch match;
+              if (std::regex_match(target, match, rgx)) {
+                  if (tmp->isConstant()) continue;
+                  trackMap.emplace_back(tmp,0.f);
+              }
+          }
+      } else {
+          Var *a =(Var*)w->obj(token.c_str());
+          if (a == 0) throw std::invalid_argument(vtype+" "+(token)+" not in model.");
+          trackMap.emplace_back(a,0.f);
+      }
+
+    }
+  }
+
+  for (auto& it : trackMap){
+    const char * token = (it.first)->GetName();
+    addBranch((std::string("tracked")+vtype+"_"+token).c_str(), &(it.second), (std::string("tracked")+vtype+"_"+token+std::string("/F")).c_str());
+  }
 }

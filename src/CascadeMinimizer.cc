@@ -96,7 +96,7 @@ void CascadeMinimizer::setAutoMax(const RooArgSet *pois)
 bool CascadeMinimizer::improve(int verbose, bool cascade, bool forceResetMinimizer) 
 {
     cacheutils::CachingSimNLL *simnllbb = dynamic_cast<cacheutils::CachingSimNLL *>(&nll_);
-    if (simnllbb && runtimedef::get(std::string("MINIMIZER_analytic"))) {
+    if (simnllbb && !runtimedef::get(std::string("MINIMIZER_no_analytic"))) {
       simnllbb->setAnalyticBarlowBeeston(true);
       forceResetMinimizer = true;
     }
@@ -155,7 +155,7 @@ bool CascadeMinimizer::improve(int verbose, bool cascade, bool forceResetMinimiz
       }
     } while (autoBounds_ && !autoBoundsOk(verbose-1));
 
-    if (simnllbb && runtimedef::get(std::string("MINIMIZER_analytic"))) {
+    if (simnllbb && !runtimedef::get(std::string("MINIMIZER_no_analytic"))) {
       simnllbb->setAnalyticBarlowBeeston(false);
     }
     return outcome;
@@ -172,6 +172,10 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
     double tol = ROOT::Math::MinimizerOptions::DefaultTolerance();
     static int maxcalls = runtimedef::get("MINIMIZER_MaxCalls");
     if (!minimizer_.get()) remakeMinimizer();
+
+    // freeze non active parameters if MINIMIZER_freezeDisassociatedParams enabled
+    freezeDiscParams(true);
+
     if (maxcalls) {
         minimizer_->setMaxFunctionCalls(maxcalls);
         minimizer_->setMaxIterations(maxcalls);
@@ -212,6 +216,10 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
      if  (outcome) Logger::instance().log(std::string(Form("CascadeMinimizer.cc: %d -- Minimization success! status=0",__LINE__)),Logger::kLogLevelInfo,__func__);
      else Logger::instance().log(std::string(Form("CascadeMinimizer.cc: %d -- Minimization ended with latest status != 0 or 1",__LINE__)),Logger::kLogLevelDebug,__func__);
     }
+
+    // restore original params
+    freezeDiscParams(false);
+
     return outcome;
 }
 
@@ -219,7 +227,7 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
 bool CascadeMinimizer::minos(const RooArgSet & params , int verbose ) {
    
    cacheutils::CachingSimNLL *simnllbb = dynamic_cast<cacheutils::CachingSimNLL *>(&nll_);
-   if (simnllbb && runtimedef::get(std::string("MINIMIZER_analytic"))) {
+   if (simnllbb && !runtimedef::get(std::string("MINIMIZER_no_analytic"))) {
       // if one of the barlow-beeston params is in "params", we don't actually
       // want to freeze it here. Trick is to set all floating ones constant now,
       // then call setAnalyticBarlowBeeston, which will initiate bb only for the
@@ -244,10 +252,13 @@ bool CascadeMinimizer::minos(const RooArgSet & params , int verbose ) {
    }
 
    //TStopwatch tw;
+   // freeze parameters not active under current indexes if MINIMIZER_freezeDisassociatedParams enabled
+   freezeDiscParams(true);
    // need to re-run Migrad before running minos
    minimizer_->minimize(myType.c_str(), "Migrad");
    int iret = minimizer_->minos(params); 
    if (verbose>0 ) Logger::instance().log(std::string(Form("CascadeMinimizer.cc: %d -- Minos finished with status=%d",__LINE__,iret)),Logger::kLogLevelDebug,__func__);
+   freezeDiscParams(false);
 
    //std::cout << "Run Minos in  "; tw.Print(); std::cout << std::endl;
 
@@ -255,8 +266,8 @@ bool CascadeMinimizer::minos(const RooArgSet & params , int verbose ) {
       cacheutils::CachingSimNLL *simnll = dynamic_cast<cacheutils::CachingSimNLL *>(&nll_);
       if (simnll) simnll->clearZeroPoint();
    }
-
-   if (simnllbb && runtimedef::get(std::string("MINIMIZER_analytic"))) {
+   
+   if (simnllbb && !runtimedef::get(std::string("MINIMIZER_no_analytic"))) {
      simnllbb->setAnalyticBarlowBeeston(false);
    }
 
@@ -266,7 +277,7 @@ bool CascadeMinimizer::minos(const RooArgSet & params , int verbose ) {
 bool CascadeMinimizer::hesse(int verbose ) {
    
    cacheutils::CachingSimNLL *simnllbb = dynamic_cast<cacheutils::CachingSimNLL *>(&nll_);
-   if (simnllbb && runtimedef::get(std::string("MINIMIZER_analytic"))) {
+   if (simnllbb && !runtimedef::get(std::string("MINIMIZER_no_analytic"))) {
       // Have to reset and minimize again first to get all parameters in
       remakeMinimizer();
       float       nominalTol(ROOT::Math::MinimizerOptions::DefaultTolerance());
@@ -286,7 +297,9 @@ bool CascadeMinimizer::hesse(int verbose ) {
       }
    }
 
+   freezeDiscParams(true);
    int iret = minimizer_->hesse(); 
+   freezeDiscParams(false);
 
    if (setZeroPoint_) {
       cacheutils::CachingSimNLL *simnll = dynamic_cast<cacheutils::CachingSimNLL *>(&nll_);
@@ -306,16 +319,14 @@ bool CascadeMinimizer::iterativeMinimize(double &minimumNLL,int verbose, bool ca
    are freely floating. We should cut them down to find which ones are
    */
 
-   // Do A reasonable fit if something changed before 
-   
-   // First freeze all parameters that have nothing to do with the current active pdfs*
-   freezeDiscParams(true);
-
    //std::cout << " Staring in iterativeMinimize and the minimum NLL so far is  " << minimumNLL << std::endl; 
    if ( fabs(minimumNLL - nll_.getVal()) > discreteMinTol_ ) { 
      improve(verbose,cascade);
      //std::cout << " Had to improve further since tolerance is not yet reached   " << nll_.getVal() << std::endl; 
    }
+
+   // First freeze all parameters that have nothing to do with the current active pdfs
+   freezeDiscParams(true);
 
    // Next remove the POIs and constrained nuisances - this is to set up for the fast loop over the Index combinations
    RooArgSet nuisances = CascadeMinimizerGlobalConfigs::O().allFloatingParameters;
@@ -352,10 +363,10 @@ bool CascadeMinimizer::iterativeMinimize(double &minimumNLL,int verbose, bool ca
    ret = improve(verbose, cascade); 
    minimumNLL = nll_.getVal();
 
+   tw.Stop(); if (verbose > 2) std::cout << "Done the full fit in " << tw.RealTime() << std::endl;
+
    // unfreeze from *
    freezeDiscParams(false);
-
-   tw.Stop(); if (verbose > 2) std::cout << "Done the full fit in " << tw.RealTime() << std::endl;
 
    return ret;
 }
@@ -444,7 +455,14 @@ bool CascadeMinimizer::minimize(int verbose, bool cascade)
            multipleMinimize(reallyCleanParameters,ret,minimumNLL,verbose,cascade,1,contIndex);
            multipleMinimize(reallyCleanParameters,ret,minimumNLL,verbose,cascade,2,contIndex);
         }
-
+	
+	// Run one last fully floating fit to maintain RooFitResult in case freezeDisassociatedParams is ON
+	if(runtimedef::get(std::string("MINIMIZER_freezeDisassociatedParams"))){
+	  freezeDiscParams(true);
+	  ret = improve(verbose,cascade,true);
+	  minimumNLL = nll_.getVal();
+	  freezeDiscParams(false);
+	}
       }
     }
 
@@ -484,8 +502,8 @@ bool CascadeMinimizer::multipleMinimize(const RooArgSet &reallyCleanParameters, 
     // If the barlow-beeston minimisation is being used we can disable it temporarily,
     // saves time if we don't have to call enable/disable on the CMSHistErrorPropagators
     // repeatedly for no purpose
-    int currentBarlowBeeston = runtimedef::get(std::string("MINIMIZER_analytic"));
-    runtimedef::set("MINIMIZER_analytic", 0);
+    int currentNoBarlowBeeston = runtimedef::get(std::string("MINIMIZER_no_analytic"));
+    runtimedef::set("MINIMIZER_no_analytic", 1);
     
     double backupStrategy = ROOT::Math::MinimizerOptions::DefaultStrategy();
     ROOT::Math::MinimizerOptions::SetDefaultStrategy(0);
@@ -682,7 +700,7 @@ bool CascadeMinimizer::multipleMinimize(const RooArgSet &reallyCleanParameters, 
     } 
     params->assignValueOnly(snap);
 
-    runtimedef::set("MINIMIZER_analytic", currentBarlowBeeston);
+    runtimedef::set("MINIMIZER_no_analytic", currentNoBarlowBeeston);
     ROOT::Math::MinimizerOptions::SetDefaultStrategy(backupStrategy);
 
     tw.Stop(); if (verbose > 2) std::cout << "Done " << myCombos.size() << " combinations in " << tw.RealTime() << " s. New discrete minimum? " << newDiscreteMinimum << std::endl;

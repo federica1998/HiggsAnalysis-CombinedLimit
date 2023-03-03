@@ -64,7 +64,7 @@ bg_others lnN    -     -     -   1.30   30% uncertainty on the rest of the backg
 -   the first columns is a label identifying the uncertainty
 -   the second column identifies the type of distribution used
     -   **`lnN`** stands for [Log-normal](http://en.wikipedia.org/wiki/Log-normal_distribution), which is the recommended choice for multiplicative corrections (efficiencies, cross sections, ...).
-        If **Δx/x** is the relative uncertainty on the multiplicative correction, one should put **1+Δx/x** in the column corresponding to the process and channel. Asymetric log-normals are supported by providing **κ<sub>down</sub>/κ<sub>up</sub>** where **κ<sub>down</sub>** is the ratio of the the yield to the nominal value for a -1σ deviation of the nuisance and **κ<sub>up</sub>** is the ratio of the the yield to the nominal value for a +1σ deviation.
+        If **Δx/x** is the relative uncertainty on the multiplicative correction, one should put **1+Δx/x** in the column corresponding to the process and channel. Asymmetric log-normals are instead supported by providing <strong>κ<sub>down</sub>/κ<sub>up</sub></strong> where <strong>κ<sub>down</sub></strong> is the ratio of the the yield to the nominal value for a -1σ deviation of the nuisance and <strong>κ<sub>up</sub></strong> is the ratio of thyield to the nominal value for $+1\sigma$ deviation. Note that for single-value log-normal with value $\kappa=1+\Delta x/x$, the yield of the process it is associated with is multiplied by $\kappa^{\theta}$. At $\theta=0$ the nominal yield is retained, at $\theta=1\sigma$ the yield is multiplied by $\kappa$ and at $\theta=-1\sigma$ the yield is multiplied by $1/\kappa$. This means that an uncertainty represented as <code>1.2</code> does not multiply the nominal yield by 0.8 for $\theta=-1\sigma$; but by 0.8333. For large uncertainties that have a symmetric effect on the yield it may therefore be desirable to encode them as asymmetric log-normals instead.
     -   **`gmN`** stands for [Gamma](http://en.wikipedia.org/wiki/Gamma_distribution), and is the recommended choice for the statistical uncertainty on a background coming from the number of events in a control region (or in a MC sample with limited statistics).
         If the control region or MC contains **N** events, and the extrapolation factor from the control region to the signal region is **α** then one shoud put **N** just after the **`gmN`** keyword, and then the value of **α** in the proper column. Also, the yield in the **`rate`** row should match with **Nα**
     -   **`lnU`** stands for log-uniform distribution. A value of **1+ε** in the column will imply that the yield of this background is allowed to float freely between **x(1+ε)** and **x/(1+ε)** (in particular, if ε is small, then this is approximately **(x-Δx,x+Δx)** with **ε=Δx/x** )
@@ -205,6 +205,9 @@ or just attach a postifx to the name of the histogram
 
 `shapes * * shapes.root $CHANNEL/$PROCESS  $CHANNEL/$PROCESS_$SYSTEMATIC`
 
+!!! warning
+   If you have a nuisance parameter which has shape effects (using `shape`) *and* rate effects (using `lnN`) you should use a single line for the systemstic uncertainty with `shape?`. This will tell combine to fist look for Up/Down systematic templates for that process and if it doesnt find them, it will interpret the number that you put for the process as a `lnN` instead. 
+
 For a detailed example of a template based binned analysis see the [H→ττ 2014 DAS tutorial](https://twiki.cern.ch/twiki/bin/viewauth/CMS/SWGuideCMSDataAnalysisSchool2014HiggsCombPropertiesExercise#A_shape_analysis_using_templates)
 
 ### Unbinned or parametric shape analysis
@@ -253,11 +256,11 @@ RooDataSet::data_obs(j)
 ```
 
 
-In this datacard, the signal is parameterised in terms of the hypothesised mass (`MH`). Combine will use this variable, instead of creating its own, which will be interpreted as the value for `-m`. For this reason, we should add the option `-m 30` (or something else within the observable range) when running combine. You will also see there is a variable named `bkg_norm`. This is used to normalize the background rate (see the section on [Rate parameters](/part2/settinguptheanalysis#rate-parameters) below for details).
+In this datacard, the signal is parameterised in terms of the hypothesised mass (`MH`). Combine will use this variable, instead of creating its own, which will be interpreted as the value for `-m`. For this reason, we should add the option `-m 30` (or something else within the observable range) when running combine. You will also see there is a variable named `bkg_norm`. This is used to normalize the background rate (see the section on [Rate parameters](#rate-parameters) below for details).
 
 
 !!! warning
-    Combine will not accept RooExtendedPdfs as an input. This is to alleviate a bug that lead to improper treatment of normalization when using multiple RooExtendedPdfs to describe a single process. You should instead use RooAbsPdfs and provide the rate as a separate object (see the [Rate parameters](/part2/settinguptheanalysis#rate-parameters) section).
+    Combine will not accept RooExtendedPdfs as an input. This is to alleviate a bug that lead to improper treatment of normalization when using multiple RooExtendedPdfs to describe a single process. You should instead use RooAbsPdfs and provide the rate as a separate object (see the [Rate parameters](#rate-parameters) section).
 
 The part of the datacard related to the systematics can include lines with the syntax
 
@@ -334,7 +337,7 @@ The `[min,max]` argument is optional and if not included, combine  will remove t
 You can attach the same `rateParam` to multiple processes/bins by either using a wild card (eg `*` will match everything, `QCD_*` will match everything starting with `QCD_` etc.) in the name of the bin and/or process or by repeating the `rateParam` line in the datacard for different bins/processes with the same name.
 
 !!! warning
-    `rateParam` is not a shortcut to evaluate the post-fit yield of a process since **other nuisances can also change the normalisation**. E.g., finding that the `rateParam` best-fit value is 0.9 does not necessarily imply that the process yield is 0.9 times the initial one. The best is to evaluate the yield taking into account the values of all nuisance parameters using [`--saveNormalizations`](../part3/nonstandard#normalizations).
+    `rateParam` is not a shortcut to evaluate the post-fit yield of a process since **other nuisances can also change the normalisation**. E.g., finding that the `rateParam` best-fit value is 0.9 does not necessarily imply that the process yield is 0.9 times the initial one. The best is to evaluate the yield taking into account the values of all nuisance parameters using [`--saveNormalizations`](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/nonstandard/#normalizations).
 
 
 This parameter is by default, freely floating. It is possible to include a Gaussian constraint on any `rateParam` which is floating (i.e not a `formula` or spline) by adding a `param` nuisance line in the datacard with the same name.
@@ -440,10 +443,18 @@ It can often be useful to modify datacards, or the runtime behavior, without hav
 If a nuisance parameter needs to be renamed for certain processes/channels, it can be done so using a single `nuisance edit` directive at the end of a datacard
 
 ```nohighlight
-nuisance edit rename process channel oldname newname
+nuisance edit rename process channel oldname newname [options]
 ```
+Note that the wildcard (**\***) can be used for either/both of process and channel.
+This will have the effect that nuisance parameter effecting a given process/channel will be renamed, thereby de-correlating it from other processes/channels.  Use options `ifexists` to skip/avoid error if nuisance not found. 
+This kind of command will only effect nuisances of the type **`shape[N]`**, **`lnN`**. Instead, if you also want to change the names of **`param`** type nuisances, you can use a global version 
 
-This will have the effect that nuisance parameter effecting a given process/channel will be renamed, thereby de-correlating it from other processes/channels.  Use options `ifexists` to skip/avoid error if nuisance not found. Other edits are also supported as follows,
+```nohighlight
+nuisance edit rename oldname newname
+```
+which will rename all **`shape[N]`**, **`lnN`** and **`param`** nuisances found in one go. You should make sure these commands come after any process/channel specific ones in the datacard. This version does not accept options.  
+
+Other edits are also supported as follows,
 
    * `nuisance edit add process channel name pdf value [options]`  -> add a new or add to a nuisance. If options is `addq`, value will be added in quadrature to this nuisance for this process/channel. If options is `overwrite`, the nuisance value will be replaced with this value
    * `nuisance edit drop process channel name [options]`  -> remove this nuisance from the process/channel. Use options `ifexists` to skip/avoid error if nuisance not found.
@@ -452,9 +463,7 @@ This will have the effect that nuisance parameter effecting a given process/chan
    * `nuisance edit freeze name [options]`  -> set nuisance to frozen by default. Can be over-ridden in `combine` command line using `--floatNuisances` option Use options `ifexists` to skip/avoid error if nuisance not found.
    * `nuisance edit merge process channel name1 name2` -> merge systematic `name2` into `name1` by adding their values in quadrature and removing `name2`. This only works if, for each process and channel included, they go in the same direction. For example, you can add 1.1 to 1.2, but not to 0.9.
 
-Note that the wildcard (**\***) can be used for either/both of process and channel.
-
-The above edits support nuisances which are any of **`shape[N]`**, **`lnN`**, **`lnU`**, **`gmN`**, **`param`**, **`flatParam`**, **`rateParam`** or **`discrete`** types.
+The above edits (excluding the renaming) support nuisances which are any of **`shape[N]`**, **`lnN`**, **`lnU`**, **`gmN`**, **`param`**, **`flatParam`**, **`rateParam`** or **`discrete`** types.
 
 #### Groups of nuisances
 
@@ -469,7 +478,7 @@ theory group = QCDscale pdf
 
 Multiple groups can be defined in this way. It is also possible to extend nuisance groups in datacards using **+=** in place of **=**.
 
-These groups can be manipulated at runtime (eg for freezing all nuisances associated to a group at runtime, see [Running the tool](#running-the-tool)). You can find more info on groups of nuisances [here](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/tree/81x-root606/data/tutorials/groups)
+These groups can be manipulated at runtime (eg for freezing all nuisances associated to a group at runtime, see [Running the tool](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/runningthetool/)). You can find more info on groups of nuisances [here](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/tree/81x-root606/data/tutorials/groups)
 
 Note that when using the automatic addition of statistical uncertainties (autoMCStats), the corresponding nuisance parameters are created by `text2workspace.py` and so do not exist in the datacards. It is therefore not possible to add autoMCStats parameters to groups of nuisances in the way described above. However, `text2workspace.py` will automatically create a group labelled **`autoMCStats`** which contains all autoMCStats parameters.
 
@@ -489,7 +498,7 @@ The `combineCards.py` script will complain if you are trying to combine a *shape
 
 ### Automatic production of datacards and workspaces
 
-For complicated analyses or cases in which multiple datacards are needed (e.g. optimisation studies), you can avoid writing these by hand. The object [Datacard](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/python/Datacard.py) defines the analysis and can be created as a python object. The template python script below will produce the same workspace as running `textToWorkspace.py` (see the section on [Physics Models](/part2/physicsmodels)) on the [realistic-counting-experiment.txt](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/data/tutorials/counting/realistic-counting-experiment.txt) datacard.
+For complicated analyses or cases in which multiple datacards are needed (e.g. optimisation studies), you can avoid writing these by hand. The object [Datacard](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/python/Datacard.py) defines the analysis and can be created as a python object. The template python script below will produce the same workspace as running `textToWorkspace.py` (see the section on [Physics Models](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part2/physicsmodels/)) on the [realistic-counting-experiment.txt](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/data/tutorials/counting/realistic-counting-experiment.txt) datacard.
 
 ```python
 from HiggsAnalysis.CombinedLimit.DatacardParser import *

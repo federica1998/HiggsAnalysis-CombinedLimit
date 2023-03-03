@@ -8,7 +8,9 @@ You may first want to look at the HIG PAG standard checks applied to all datacar
 
 If you have already found the higgs boson but it's an exotic one, instead of computing a limit or significance you might want to extract it's cross section by performing a maximum-likelihood fit. Or, more seriously, you might want to use this same package to extract the cross section of some other process (e.g. the di-boson production). Or you might want to know how well the data compares to you model, e.g. how strongly it constraints your other nuisance parameters, what's their correlation, etc. These general diagnostic tools are contained in the method `FitDiagnostics`. 
 
+```
     combine -M FitDiagnostics datacard.txt
+```
 
 The program will print out the result of the *two fits* performed with signal strength **r** (or first POI in the list) set to zero and a second with floating **r**. The output root tree will contain the best fit value for **r** and it's uncertainty. You will also get a `fitDiagnostics.root` file containing the following objects:
 
@@ -46,8 +48,7 @@ The `minuit_summary_status` is the usual status from Minuit, details of which ca
 
 A fit status of -1 indicates that the fit failed (Minuit summary was not 0 or 1) and hence the fit is **not** valid.
 
-
-##### Fit options
+### Fit options
 
 - If you need only the signal+background fit, you can run with `--justFit`. This can be useful if the background-only fit is not interesting or not converging (e.g. if the significance of your signal is very very large)
 - You can use `--rMin` and `--rMax` to set the range of the first POI; a range that is not too large compared to the uncertainties you expect from the fit usually gives more stable and accurate results.
@@ -57,7 +58,7 @@ A fit status of -1 indicates that the fit failed (Minuit summary was not 0 or 1)
 - If you find the covariance matrix provided by HESSE is not accurate (i.e. `fit_s->Print()` reports this was forced positive-definite) then a custom HESSE-style calculation of the covariance matrix can be used instead. This is enabled by running FitDiagnostics with the `--robustHesse 1` option. Please note that the status reported by `RooFitResult::Print()` will contain `covariance matrix quality: Unknown, matrix was externally provided` when robustHesse is used, this is normal and does not indicate a problem. NB: one feature of the robustHesse algorithm is that if it still cannot calculate a positive-definite covariance matrix it will try to do so by dropping parameters from the hessian matrix before inverting. If this happens it will be reported in the output to the screen. 
 - For other fitting options see the [generic minimizer options](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/wiki/runningthetool#generic-minimizer-options) section.
 
-#### Fit parameter uncertainties
+### Fit parameter uncertainties
 
 If you get a warning message when running `FitDiagnostics` which says `Unable to determine uncertainties on all fit parameters`. This means the covariance matrix calculated in FitDiagnostics was not correct. 
 
@@ -72,7 +73,7 @@ A discontinuity in the NLL function or its derivatives at or near the minimum.
 
 If you are aware that your analysis has any of these features you could try resolving these. Setting `--cminDefaultMinimizerStrategy 0` can also help with this problem.
 
-#### Pre and post fit nuisance parameters and pulls
+### Pre and post fit nuisance parameters and pulls
 
 It is possible to compare pre-fit and post-fit nuisance parameters with the script [diffNuisances.py](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/test/diffNuisances.py). Taking as input a `fitDiagnostics.root` file, the script will by default print out the parameters which have changed significantly w.r.t. their initial estimate. For each of those parameters, it will print out the shift in value and the post-fit uncertainty, both normalized to the input values, and the linear correlation between the parameter and the signal strength.
 
@@ -108,8 +109,7 @@ This script has the option (`-g outputfile.root`) to produce plots of the fitted
 !!! info
     In the above options, if an asymmetric uncertainty is associated to the nuisance parameter, then the choice of which uncertainty is used in the definition of the pull will depend on the sign of $\theta-\theta_{I}$. 
 
-
-#### Normalizations
+### Normalizations
 
 For a certain class of models, like those made from datacards for shape-based analysis, the tool can also compute and save to the output root file the best fit yields of all processes. If this feature is turned on with the option `--saveNormalizations`, the file will also contain three RooArgSet `norm_prefit`, `norm_fit_s`, `norm_fit_b` objects each containing one RooConstVar for each channel `xxx` and process `yyy` with name **`xxx/yyy`** and value equal to the best fit yield. You can use `RooRealVar::getVal` and `RooRealVar::getError` to estimate both the post-(or pre-)fit values and uncertainties of these normalisations. 
 
@@ -122,7 +122,7 @@ The sample pyroot macro [mlfitNormsToText.py](https://github.com/cms-analysis/Hi
 Note that this procedure works only for "extended likelihoods" like the ones used in shape-based analysis, not for the cut-and-count datacards. You can however convert a cut-and-count datacard in an equivalent shape-based one by adding a line `shapes * * FAKE` in the datacard after the `imax`, `jmax`, `kmax` or using `combineCards.py countingcard.txt -S > shapecard.txt`. 
 
 
-##### Per-bin norms for shape analyses
+#### Per-bin norms for shape analyses
  
 If you have a shape based analysis, you can also (instead) include the option `--savePredictionsPerToy`. With this option, additional branches will be filled in the three output trees contained in `fitDiagnostics.root`.  
 
@@ -134,12 +134,14 @@ Additionally, there will be filled branches which provide the value of the expec
     Be aware that for *unbinned* models, a binning scheme is adopted based on the `RooRealVar::getBinning` for the observable defining the shape, if it exists, or combine will adopt some appropriate binning for each observable. 
 
 
-
-#### Plotting
+### Plotting
 
 `FitDiagnostics` can also produce pre- and post-fit plots the model in the same directory as `fitDiagnostics.root` along with the data. To get them, you have to specify the option `--plots`, and then *optionally specify* what are the names of the signal and background pdfs, e.g. `--signalPdfNames='ggH*,vbfH*'` and `--backgroundPdfNames='*DY*,*WW*,*Top*'` (by default, the definitions of signal and background are taken from the datacard). For models with more than 1 observable, a separate projection onto each observable will be produced. 
 
 An alternative is to use the options `--saveShapes`. The result will be additional folders in `fitDiagnostics.root` for each category, with pre and post-fit distributions of the signals and backgrounds as TH1s and the data as TGraphAsymmErrors (with Poisson intervals as error bars).
+
+!!! info
+    If you want to save post-fit shapes at a specific r value, add the options `--customStartingPoint` and `--skipSBFit`, and set the r value. The result will appear in **shapes\_fit\_b**, as described below.
 
 Three additional folders (**shapes\_prefit**, **shapes\_fit\_sb** and **shapes\_fit\_b** ) will contain the following distributions,
 
@@ -173,7 +175,7 @@ Uncertainties on the shapes will be added with the option `--saveWithUncertainti
 Additionally, the covariance matrix **between** bin yields (or yields/bin-widths) in each channel will also be saved as a `TH2F` named **total_covar**. If the covariance between *all bins* across *all channels* is desired, this can be added using the option `--saveOverallShapes`. Each folder will now contain additional distributions (and covariance matrices) corresponding to the concatenation of the bins in each channel (and therefore the covaraince between every bin in the analysis). The bin labels should make it clear as to which bin corresponds to which channel. 
 
 
-#### Toy-by-toy diagnostics
+### Toy-by-toy diagnostics
 
 `FitDiagnostics` can also be used to diagnose the fitting procedure in toy experiments to identify potentially problematic nuisance parameters when running the full limits/p-values. This can be done by adding the option `-t <num toys>`. The output file, `fitDiagnostics.root` the three `TTrees` will contain the value of the constraint fitted result in each toy, as a separate entry. It is recommended to use the following options when investigating toys to reduce the running time: `--toysFrequentist` `--noErrors` `--minos none`
 
@@ -188,10 +190,9 @@ plotParametersFomToys("fitDiagnosticsToys.root","fitDiagnosticsData.root","works
 The first argument is the name of the output file from running with toys, and the second and third (optional) arguments are the name of the file containing the result from a fit to the data and the workspace (created from `text2workspace.py`). The fourth argument can be used to specify a cut string applied to one of the branches in the tree which can be used to correlate strange behaviour with specific conditions. The output will be 2 pdf files (**`tree_fit_(s)b.pdf`**) and 2 root files  (**`tree_fit_(s)b.root`**) containing canvases of the fit results of the tool. For details on the output plots, consult [AN-2012/317](http://cms.cern.ch/iCMS/user/noteinfo?cmsnoteid=CMS%20AN-2012/317).
 
 
-
 ## Scaling constraints
 
-It possible to scale the **constraints** on the nuisance parameters when converting the datacard to a workspace (see the section on [physics models](/part2/physicsmodels#model-building)) with `text2workspace.py`. This can be useful for projection studies of the analysis to higher luminosities or with different assumptions about the sizes of certain systematics without changing the datacard by hand. 
+It possible to scale the **constraints** on the nuisance parameters when converting the datacard to a workspace (see the section on [physics models](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part2/physicsmodels/)) with `text2workspace.py`. This can be useful for projection studies of the analysis to higher luminosities or with different assumptions about the sizes of certain systematics without changing the datacard by hand. 
 
 We consider two kinds of scaling;  
 
@@ -219,7 +220,7 @@ This factory syntax is quite flexible, but for our use case the typical format w
 !!! warning 
     We are playing a slight trick here with the `lumiscale` parameter. At the point at which `text2workspace.py` is building these scaling terms the `lumiscale` for the `rateParam` has not yet been created. By writing `lumiscale[1]` we are telling RooFit to create this variable with an initial value of 1, and then later this will be re-used by the `rateParam` creation. 
 
-A similar option, `--X-nuisance-group-function`, can be used to scale whole groups of nuisances (see [groups of nuisances](/part2/settinguptheanalysis#groups-of-nuisances)). Instead of a regular expression just give the group name instead, 
+A similar option, `--X-nuisance-group-function`, can be used to scale whole groups of nuisances (see [groups of nuisances](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part2/settinguptheanalysis/#groups-of-nuisances)). Instead of a regular expression just give the group name instead, 
 
     text2workspace.py datacard.txt --X-nuisance-group-function [group name] 'expr::lumisyst("1/sqrt(@0)",lumiscale[1])'
 
@@ -230,7 +231,7 @@ The impact of a nuisance parameter (NP) θ on a parameter of interest (POI) μ i
 
 This is effectively a measure of the correlation between the NP and the POI, and is useful for determining which NPs have the largest effect on the POI uncertainty.
 
-It is possible to use the `FitDiagnostics` method of combine with the option `--algo impact -P parameter` to calculate the impact of a particular nuisance parameter on the parameter(s) of interest. We will use the `combineTool.py` script to automate the fits (see the [`combineTool`](/part1/README#combine-tool) section to check out the tool.
+It is possible to use the `FitDiagnostics` method of combine with the option `--algo impact -P parameter` to calculate the impact of a particular nuisance parameter on the parameter(s) of interest. We will use the `combineTool.py` script to automate the fits (see the [`combineTool`](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/#combine-tool) section to check out the tool.
 
 We will use an example workspace from the [$H\rightarrow\tau\tau$ datacard](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/data/tutorials/htt/125/htt_tt.txt),
 
@@ -243,13 +244,13 @@ Calculating the impacts is done in a few stages. First we just fit for each POI,
 
     combineTool.py -M Impacts -d htt_tt.root -m 125 --doInitialFit --robustFit 1
    
-Have a look at the options as for [likelihood scans](/part3/commonstatsmethods.html#useful-options-for-likelihood-scans) when using `robustFit 1`.
+Have a look at the options as for [likelihood scans](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/commonstatsmethods/#useful-options-for-likelihood-scans) when using `robustFit 1`.
 
 Next we perform a similar scan for each nuisance parameter with the `--doFits` options,
 
     combineTool.py -M Impacts -d htt_tt.root -m 125 --robustFit 1 --doFits
     
-Note that this will run approximately 60 scans, and to speed things up the option `--parallel X` can be given to run X combine jobs simultaneously. The batch and grid submission methods described in the [combineTool for job submission](/part3/runningthetool#combinetool-for-job-submission) section can also be used.
+Note that this will run approximately 60 scans, and to speed things up the option `--parallel X` can be given to run X combine jobs simultaneously. The batch and grid submission methods described in the [combineTool for job submission](http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/runningthetool/#combinetool-for-job-submission) section can also be used.
 
 Once all jobs are completed the output can be collected and written into a json file:
 
@@ -282,7 +283,57 @@ that will rename the POI label on the plot.
 !!! info 
     Since `combineTool` accepts the usual options for combine you can also generate the impacts on an Asimov or toy dataset. 
 
-The left panel in the summary plot shows the value of $(\theta-\theta_{0})/\Delta_{\theta}$ where $\theta$ and $\theta_{0}$ are the **post** and **pre**-fit values of the nuisance parameter and $\Delta_{\theta}$ is the **pre**-fit uncertainty. The asymmetric error bars show the **pre**-fit uncertainty divided by the **post**-fit uncertainty meaning that parameters with error bars smaller than $\pm 1$ are constrained in the fit. As with the `diffNuisances.py` script, use the option `--pullDef` are defined (eg to show the *pull* instead). 
+The left panel in the summary plot shows the value of $(\theta-\theta_{0})/\Delta_{\theta}$ where $\theta$ and $\theta_{0}$ are the **post** and **pre**-fit values of the nuisance parameter and $\Delta_{\theta}$ is the **pre**-fit uncertainty. The asymmetric error bars show the **post**-fit uncertainty divided by the **pre**-fit uncertainty meaning that parameters with error bars smaller than $\pm 1$ are constrained in the fit. As with the `diffNuisances.py` script, use the option `--pullDef` are defined (eg to show the *pull* instead). 
+
+## Breakdown of uncertainties
+
+Often you will want to report the breakdown of your total (systematic) uncertainty on a measured parameter due to one or more groups of nuisance parameters. For example these groups could be theory uncertainties, trigger uncertainties, ... The prodecude to do this in combine is to sequentially freeze groups of nuisance parameters and subtract (in quadrature) from the total uncertainty. Below are the steps to do so. We will use the `data/tutorials/htt/125/htt_tt.txt` datacard for this. 
+
+1. Add groups to the datacard to group nuisance parameters. Nuisance parameters not in groups will be considered as "rest" in the later steps. The lines should look like the following and you should add them to the end of the datacard
+```
+theory 	    group = QCDscale_VH QCDscale_ggH1in QCDscale_ggH2in QCDscale_qqH UEPS pdf_gg pdf_qqbar
+calibration group = CMS_scale_j_8TeV CMS_scale_t_tautau_8TeV CMS_htt_scale_met_8TeV
+efficiency  group = CMS_eff_b_8TeV   CMS_eff_t_tt_8TeV CMS_fake_b_8TeV
+```
+
+2. Create the workspace with `text2workspace.py data/tutorials/htt/125/htt_tt.txt -m 125`. 
+
+3. Run a post-fit with all nuisance parameters floating and store the workspace in an output file - `combine data/tutorials/htt/125/htt_tt.root -M MultiDimFit --saveWorkspace -n htt.postfit`
+
+4. Run a scan from the postfit workspace 
+```
+combine higgsCombinehtt.postfit.MultiDimFit.mH120.root -M MultiDimFit -n htt.total --algo grid --snapshotName MultiDimFit --setParameterRanges r=0,4
+```
+
+5. Run additional scans using the post-fit workspace sequentially adding another group to the list of groups to freeze
+```
+combine higgsCombinehtt.postfit.MultiDimFit.mH120.root -M MultiDimFit --algo grid --snapshotName MultiDimFit --setParameterRanges r=0,4  --freezeNuisanceGroups theory -n htt.freeze_theory
+
+combine higgsCombinehtt.postfit.MultiDimFit.mH120.root -M MultiDimFit --algo grid --snapshotName MultiDimFit --setParameterRanges r=0,4  --freezeNuisanceGroups theory,calibration -n htt.freeze_theory_calibration
+
+combine higgsCombinehtt.postfit.MultiDimFit.mH120.root -M MultiDimFit --algo grid --snapshotName MultiDimFit --setParameterRanges r=0,4  --freezeNuisanceGroups theory,calibration,efficiency -n htt.freeze_theory_calibration_efficiency
+```
+
+6. Run one last scan freezing all of the constrained nuisances (this represents the statistics only uncertainty). 
+```
+combine higgsCombinehtt.postfit.MultiDimFit.mH120.root -M MultiDimFit --algo grid --snapshotName MultiDimFit --setParameterRanges r=0,4  --freezeParameters allConstrainedNuisances -n htt.freeze_all
+```
+
+7. Use the `combineTool` script `plot1D.py` to report the breakdown of uncertainties. 
+
+```
+plot1DScan.py higgsCombinehtt.total.MultiDimFit.mH120.root --main-label "Total Uncert."  --others higgsCombinehtt.freeze_theory.MultiDimFit.mH120.root:"freeze theory":4 higgsCombinehtt.freeze_theory_calibration.MultiDimFit.mH120.root:"freeze theory+calibration":7 higgsCombinehtt.freeze_theory_calibration_efficiency.MultiDimFit.mH120.root:"freeze theory+calibration+efficiency":2 higgsCombinehtt.freeze_all.MultiDimFit.mH120.root:"stat only":6  --output breakdown --y-max 10 --y-cut 40 --breakdown "theory,calibration,efficiency,rest,stat"
+```
+
+The final step calculates the contribution of each group of nuisances as the subtraction in quadrature of each scan from the previous one. This procedure guarantees that the sum in quadrature of the individual components is the same as the total uncertainty. 
+
+The plot below is produced, 
+
+![](images/breakdown.png)
+
+!!! warning 
+    While the above procedure is guaranteed the have the effect that the sum in quadrature of the breakdown will equal the total uncertainty, the order in which you freeze the groups can make a difference due to correlations induced by the fit. You should check if the answers change significantly if changing the order and we reccomend you start with the largest group (in terms of overall contribution to the uncertainty) first and work down the list in order of contribution.  
+
 
 ## Channel Masking 
 
@@ -440,7 +491,7 @@ h->Fit("gaus")
 ![](images/biasexample.png) 
 
 
-From the fitted Gaussian, we see the mean is at -1.35 which would indicate a bias of 135% of the uncertainty on mu from choosing the polynomial when the true function is an exponential!
+From the fitted Gaussian, we see the mean is at -1.29 which would indicate a bias of 129% of the uncertainty on mu from choosing the polynomial when the true function is an exponential!
 
 ### Discrete profiling 
 
@@ -486,8 +537,54 @@ You may want to check with the combine dev team if using these options as they a
 
 [RooSplineND](https://github.com/cms-analysis/HiggsAnalysis-CombinedLimit/blob/81x-root606/interface/RooSplineND.h) can be used to interpolate from tree of points to produce a continuous function in N-dimensions. This function can then be used as input to workspaces allowing for parametric rates/cross-sections/efficiencies etc OR can be used to up-scale the resolution of likelihood scans (i.e like those produced from combine) to produce smooth contours. 
 
-The following script is an example of its use which produces a 2D spline from a set of points generated from a function. 
+The spline makes use of a radial basis decomposition to produce a continous $N \to 1$ map (function) from $M$ provided sample points. The function of the $N$ variables $\vec{x}$ 
+is assumed to be of the form, 
 
+$$
+f(\vec{x}) = \sum_{i=1}^{M}w_{i}\phi(||\vec{x}-\vec{x}_{i}||),
+$$
+
+where $\phi(||\vec{z}||) = e^{-\frac{||\vec{z}||}{\epsilon^{2}}}$. The distance $||.||$ between two points is given by, 
+
+$$
+||\vec{x}-\vec{y}||  = \sum_{j=1}^{N}(x_{j}-y_{j})^{2},
+$$
+
+if the option `rescale=false` and, 
+
+$$
+||\vec{x}-\vec{y}||  = \sum_{j=1}^{N} M^{1/N} \cdot \left( \frac{ x_{j}-y_{j} }{ \mathrm{max_{i=1,M}}(x_{i,j})-\mathrm{min_{i=1,M}}(x_{i,j}) }\right)^{2},
+$$
+
+if the option `rescale=true`. Given the sample points, it is possible to determine the weights $w_{i}$ as the solution of the set of equations, 
+
+$$
+\sum_{i=1}^{M}w_{i}\phi(||\vec{x}_{j}-\vec{x}_{i}||) = f(\vec{x}_{j}).
+$$
+
+The solution is obtained using the `eigen` c++ package.  
+
+The typical constructor of the object is done as follows;
+
+```c++
+RooSplineND(const char *name, const char *title, RooArgList &vars, TTree *tree, const char* fName="f", double eps=3., bool rescale=false, std::string cutstring="" ) ;
+```
+
+where the arguments are:
+
+   * `vars`: A RooArgList of RooRealVars representing the $N$ dimensions of the spline. The length of this list determines the dimension $N$ of the spline. 
+   * `tree`: a TTree pointer where each entry represents a sample point used to construct the spline. The branch names must correspond to the names of the variables in `vars`. 
+   * `fName`: is a string representing the name of the branch to interpret as the target function $f$. 
+   * `eps` : is the value of $\epsilon$ and represents the *width* of the basis functions $\phi$. 
+   * `rescale` : is an option to re-scale the input sample points so that each variable has roughly the same range (see above in the definition of $||.||$). 
+   * `cutstring` : a string to remove sample points from the tree. Can be any typical cut string (eg "var1>10 && var2<3"). 
+
+The object can be treaeted as a `RooAbsArg` and its value for the current values of the parameters is obtained as  usual by using the `getVal()` method. 
+
+!!! warning  
+    You should not include more variable branches than contained  in `vars` in the tree as the spline will interpret them as additional sample points. You should get a warning if there are two *nearby* points  in the input samples and this will cause a failure in determining the weights. If you cannot create a reduced tree, you can remove entries by using the `cutstring`. 
+
+The following script is an example of its use which produces a 2D spline (`N=2`) from a set of 400 points (`M=400`)  generated from a function. 
 
 ```c++
 void splinend(){
@@ -497,12 +594,12 @@ void splinend(){
    TTree *tree = new TTree("tree_vals","tree_vals");
    float xb,yb,fb;
 
-   tree->Branch("f",&fb,"f/Float_t");
-   tree->Branch("x",&xb,"x/Float_t");
-   tree->Branch("y",&yb,"y/Float_t");
+   tree->Branch("f",&fb,"f/F");
+   tree->Branch("x",&xb,"x/F");
+   tree->Branch("y",&yb,"y/F");
    
    TRandom3 *r = new TRandom3();
-   int nentries = 20; // just use a regular grid of 20x20
+   int nentries = 20; // just use a regular grid of 20x20=400 points
 
    double xmin = -3.2;
    double xmax = 3.2;
@@ -565,8 +662,8 @@ void splinend(){
      for (double yy=xmin;yy<ymax;yy+=0.1){
         x.setVal(xx);
         y.setVal(yy);
-      gr->SetPoint(pt,xx,yy,spline.getVal());
-      pt++;
+        gr->SetPoint(pt,xx,yy,spline->getVal());
+        pt++;
      }
    }
 
@@ -611,14 +708,29 @@ void examplews(){
     TFile *fOut = new TFile("param_ws.root","RECREATE");
     RooWorkspace wspace("wspace","wspace");
 
+    // better to create the bins rather than use the "nbins,min,max" to avoid spurious warning about adding bins with different 
+    // ranges in combine - see https://root-forum.cern.ch/t/attempt-to-divide-histograms-with-different-bin-limits/17624/3 for why!
+    const int nbins = 4; 
+    double xmin=200.;
+    double xmax=1000.;
+    double xbins[5] = {200.,400.,600.,800.,1000.};
+    
     // A search in a MET tail, define MET as our variable
-    RooRealVar met("met","E_{T}^{miss}",200,1000);
+
+    double xmin=200.;
+    double xmax=1000.;
+
+    RooRealVar met("met","E_{T}^{miss}",200,xmin,xmax);
     RooArgList vars(met);
 
+    // better to create the bins rather than use the "nbins,min,max" to avoid spurious warning about adding bins with different 
+    // ranges in combine - see https://root-forum.cern.ch/t/attempt-to-divide-histograms-with-different-bin-limits/17624/3 for why!
+    double xbins[5] = {200.,400.,600.,800.,1000.};
     // ---------------------------- SIGNAL REGION -------------------------------------------------------------------//
     // Make a dataset, this will be just four bins in MET.
     // its easiest to make this from a histogram. Set the contents to "somehting"
-    TH1F data_th1("data_obs_SR","Data observed in signal region",4,200,1000);
+    TH1F data_th1("data_obs_SR","Data observed in signal region",nbins,xbins);
+
     data_th1.SetBinContent(1,100);
     data_th1.SetBinContent(2,50);
     data_th1.SetBinContent(3,25);
@@ -645,7 +757,8 @@ void examplews(){
     RooAddition p_bkg_norm("bkg_SR_norm","Total Number of events from background in signal region",bkg_SR_bins);
 
     // Every signal region needs a signal
-    TH1F signal_th1("signal_SR","Signal expected in signal region",4,200,1000);
+    TH1F signal_th1("signal_SR","Signal expected in signal region",nbins,xbins);
+
     signal_th1.SetBinContent(1,1);
     signal_th1.SetBinContent(2,2);
     signal_th1.SetBinContent(3,3);
@@ -655,7 +768,8 @@ void examplews(){
 
     // -------------------------------------------------------------------------------------------------------------//
     // ---------------------------- CONTROL REGION -----------------------------------------------------------------//
-    TH1F data_CRth1("data_obs_CR","Data observed in control region",4,200,1000);
+    TH1F data_CRth1("data_obs_CR","Data observed in control region",nbins,xbins);
+
     data_CRth1.SetBinContent(1,200);
     data_CRth1.SetBinContent(2,100);
     data_CRth1.SetBinContent(3,50);
@@ -702,6 +816,41 @@ void examplews(){
     RooAddition p_CRbkg_norm("bkg_CR_norm","Total Number of events from background in control region",bkg_CR_bins);
     // -------------------------------------------------------------------------------------------------------------//
 
+
+    // we can also use the standard interpolation from combine by providing alternative shapes (as RooDataHists)
+    // here we're adding two of them (JES and ISR)
+    TH1F background_up("tbkg_CR_JESUp","",nbins,xbins);
+    background_up.SetBinContent(1,CRbin1.getVal()*1.01);
+    background_up.SetBinContent(2,CRbin2.getVal()*1.02);
+    background_up.SetBinContent(3,CRbin3.getVal()*1.03);
+    background_up.SetBinContent(4,CRbin4.getVal()*1.04);
+    RooDataHist bkg_CRhist_sysUp("bkg_CR_JESUp","Bkg sys up",vars,&background_up);
+    wspace.import(bkg_CRhist_sysUp);
+
+    TH1F background_down("bkg_CR_JESDown","",nbins,xbins);
+    background_down.SetBinContent(1,CRbin1.getVal()*0.90);
+    background_down.SetBinContent(2,CRbin2.getVal()*0.98);
+    background_down.SetBinContent(3,CRbin3.getVal()*0.97);
+    background_down.SetBinContent(4,CRbin4.getVal()*0.96);
+    RooDataHist bkg_CRhist_sysDown("bkg_CR_JESDown","Bkg sys down",vars,&background_down);
+    wspace.import(bkg_CRhist_sysDown);
+    
+    TH1F background_2up("tbkg_CR_ISRUp","",nbins,xbins);
+    background_2up.SetBinContent(1,CRbin1.getVal()*0.85);
+    background_2up.SetBinContent(2,CRbin2.getVal()*0.9);
+    background_2up.SetBinContent(3,CRbin3.getVal()*0.95);
+    background_2up.SetBinContent(4,CRbin4.getVal()*0.99);
+    RooDataHist bkg_CRhist_sys2Up("bkg_CR_ISRUp","Bkg sys 2up",vars,&background_2up);
+    wspace.import(bkg_CRhist_sys2Up);
+
+    TH1F background_2down("bkg_CR_ISRDown","",nbins,xbins);
+    background_2down.SetBinContent(1,CRbin1.getVal()*1.15);
+    background_2down.SetBinContent(2,CRbin2.getVal()*1.1);
+    background_2down.SetBinContent(3,CRbin3.getVal()*1.05);
+    background_2down.SetBinContent(4,CRbin4.getVal()*1.01);
+    RooDataHist bkg_CRhist_sys2Down("bkg_CR_ISRDown","Bkg sys 2down",vars,&background_2down);
+    wspace.import(bkg_CRhist_sys2Down);
+
     // import the pdfs
     wspace.import(p_bkg);
     wspace.import(p_bkg_norm,RooFit::RecycleConflictNodes());
@@ -714,13 +863,14 @@ void examplews(){
     fOut->Close();
     fOut->Delete();
 
+
 }
 ```
 
 Lets go through what the script is doing. First, the observable for the search is the missing energy so we create a parameter to represent that.
 
 ```c++
-   RooRealVar met("met","E_{T}^{miss}",200,1000);
+   RooRealVar met("met","E_{T}^{miss}",xmin,xmax);
 ```
 First, the following lines create a freely floating parameter for each of our bins (in this example, there are only 4 bins, defined for our observable `met`.
 
@@ -785,6 +935,27 @@ As before, we also need to create the `RooParametricHist` for this process in th
    RooAddition p_CRbkg_norm("bkg_CR_norm","Total Number of events from background in control region",bkg_CR_bins);
 ```
 
+Finally, we can also create alternative shape variations (Up/Down) that can be fed to combine as we do with `TH1` or `RooDataHist` type workspaces. These need 
+to be of type `RooDataHist`. The example below is for a Jet Energy Scale type shape uncertainty. 
+
+```c++
+   TH1F background_up("tbkg_CR_JESUp","",nbins,xbins);
+   background_up.SetBinContent(1,CRbin1.getVal()*1.01);
+   background_up.SetBinContent(2,CRbin2.getVal()*1.02);
+   background_up.SetBinContent(3,CRbin3.getVal()*1.03);
+   background_up.SetBinContent(4,CRbin4.getVal()*1.04);
+   RooDataHist bkg_CRhist_sysUp("bkg_CR_JESUp","Bkg sys up",vars,&background_up);
+   wspace.import(bkg_CRhist_sysUp);
+
+   TH1F background_down("bkg_CR_JESDown","",nbins,xbins);
+   background_down.SetBinContent(1,CRbin1.getVal()*0.90);
+   background_down.SetBinContent(2,CRbin2.getVal()*0.98);
+   background_down.SetBinContent(3,CRbin3.getVal()*0.97);
+   background_down.SetBinContent(4,CRbin4.getVal()*0.96);
+   RooDataHist bkg_CRhist_sysDown("bkg_CR_JESDown","Bkg sys down",vars,&background_down);
+   wspace.import(bkg_CRhist_sysDown);
+```
+
 Below are datacards (for signal and control regions) which can be used in conjunction with the workspace built above. In order to "use" the control region, simply combine the two cards as usual using `combineCards.py`.
 
 
@@ -831,7 +1002,7 @@ kmax * number of nuisance parameters
 -------------------------------------------------------------------------------------------------------------------------------------------
 
 shapes data_obs    control   param_ws.root wspace:data_obs_CR 
-shapes background  control   param_ws.root wspace:bkg_CR   # the background model pdf which is dependant on that in the SR, note other backgrounds can be added as usual
+shapes background  control   param_ws.root wspace:bkg_CR  wspace:bkg_CR_$SYSTEMATIC # the background model pdf which is dependant on that in the SR, note other backgrounds can be added as usual
 
 -------------------------------------------------------------------------------------------------------------------------------------------
 bin         control
@@ -841,11 +1012,14 @@ observation  -1
 bin                 control     
 process             background  
 process             1           
-rate               1                   
+rate                1                   
 -------------------------------------------------------------------------------------------------------------------------------------------
 
+JES shape 1 
+ISR shape 1 
 efficiency param 0 1
 acceptance param 0 1
+
 ```
 
 Note that for the control region, our nuisance parameters appear as `param` types so that combine will correctly constrain them.  
