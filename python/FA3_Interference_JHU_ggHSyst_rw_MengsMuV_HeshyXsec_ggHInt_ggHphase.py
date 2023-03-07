@@ -3,7 +3,7 @@ import re
 
 class FA3_Interference_JHU_ggHSyst_rw_MengsMuV_HeshyXsec_ggHInt_ggHphase(PhysicsModel):
     def __init__(self):
-        self.altSignal = "ALT0M"
+        self.altSignal = "ALT_0M"
 
     def setPhysicsOptions(self,physOptions):
         for po in physOptions:
