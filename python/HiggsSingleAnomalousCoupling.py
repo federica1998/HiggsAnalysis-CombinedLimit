@@ -112,11 +112,25 @@ class FA3_Interference_JHU_ggHSyst_rw_MengsMuV_HeshyXsec_ggHInt_ggHphase(Physics
         if process in ["ggH_%sf05_%s_hgg"%(self.altSignal,y) for y in years]: # not yet considered
             scale = 'intCoupling_ggH'
         ##############################
-        # these should be fixed at the tree making level: the ALT ZH samples are called ALT0XX, while the SM ALT_XX
-        if process in ["ZH_%s_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
-            scale = 'bsmCoupling_ZH'
-        if process in ["ZH_%sf05ph0_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
-            scale = 'intCoupling_ZH'
+        # these should be fixed at the tree making level: process names have some different naming convention of procs
+        if 'L1' in self.altSignal:
+            if process in ["ZH_%s_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
+                scale = 'bsmCoupling_ZH'
+            if process in ["ZH_%sf05ph0_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
+                scale = 'intCoupling_ZH'
+            if process in ["WH_%s_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
+                scale = 'bsmCoupling_WH'
+            if process in ["WH_%sf05ph0_%s_hgg"%(self.altSignal.replace('_','0'),y) for y in years]:
+                scale = 'intCoupling_WH'
+        else:
+            if process in ["ZH_%s_%s_hgg"%(self.altSignal.replace('_',''),y) for y in years]:
+                scale = 'bsmCoupling_ZH'
+            if process in ["ZH_%sf05ph0_%s_hgg"%(self.altSignal.replace('_',''),y) for y in years]:
+                scale = 'intCoupling_ZH'
+            if process in ["WH_%s_%s_hgg"%(self.altSignal.replace('_',''),y) for y in years]:
+                scale = 'bsmCoupling_WH'
+            if process in ["WH_%sf05ph0_%s_hgg"%(self.altSignal.replace('_',''),y) for y in years]:
+                scale = 'intCoupling_WH'            
         ##############################
         if process in ["ttH_%s_hgg"%y for y in years]:
             scale = 'muf'
